@@ -13,8 +13,6 @@ from pathlib import Path
 
 import defusedxml.minidom
 
-from ooxml.scripts.validation import DOCXSchemaValidator, RedliningValidator
-
 
 def pack(
     input_directory: str,
@@ -42,16 +40,6 @@ def pack(
     if output_path.suffix.lower() != ".docx":
         return None, f"Error: {output_file} must be a .docx file"
 
-    # Validate with auto-repair if requested and original file provided
-    if validate and original_file:
-        original_path = Path(original_file)
-        if original_path.exists():
-            success, output = _run_validation(input_dir, original_path)
-            if output:
-                print(output)
-            if not success:
-                return None, f"Error: Validation failed for {input_dir}"
-
     # Work in temporary directory to avoid modifying original
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_content_dir = Path(temp_dir) / "content"
@@ -70,36 +58,6 @@ def pack(
                     zf.write(f, f.relative_to(temp_content_dir))
 
     return None, f"Successfully packed {input_dir} to {output_file}"
-
-
-def _run_validation(unpacked_dir: Path, original_file: Path) -> tuple[bool, str | None]:
-    """Run validation with auto-repair.
-
-    Returns:
-        (success, output) - success is True if all validations pass
-    """
-    validators = [DOCXSchemaValidator, RedliningValidator]
-    output_lines = []
-    success = True
-
-    # Run auto-repair
-    total_repairs = 0
-    for V in validators:
-        validator = V(unpacked_dir, original_file)
-        total_repairs += validator.repair()
-    if total_repairs:
-        output_lines.append(f"Auto-repaired {total_repairs} issue(s)")
-
-    # Run validation
-    for V in validators:
-        validator = V(unpacked_dir, original_file)
-        if not validator.validate():
-            success = False
-
-    if success:
-        output_lines.append("All validations PASSED!")
-
-    return success, "\n".join(output_lines) if output_lines else None
 
 
 def _condense_xml(xml_file: Path) -> None:

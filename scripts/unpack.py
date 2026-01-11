@@ -11,7 +11,6 @@ import zipfile
 from pathlib import Path
 
 import defusedxml.minidom
-from helpers.merge_runs import merge_runs as do_merge_runs
 
 
 def unpack(
@@ -52,11 +51,6 @@ def unpack(
             _pretty_print_xml(xml_file)
 
         message = f"Unpacked {input_file} ({len(xml_files)} XML files)"
-
-        # Merge runs if requested
-        if merge_runs:
-            merge_count, _ = do_merge_runs(str(output_path))
-            message += f", merged {merge_count} runs"
 
         return None, message
 
