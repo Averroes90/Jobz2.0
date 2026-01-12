@@ -6,3 +6,4 @@ config/credentials.json
 input/
 output/
 venv/
+prompts/

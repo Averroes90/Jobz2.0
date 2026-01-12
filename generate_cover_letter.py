@@ -63,26 +63,75 @@ def check_api_key():
         sys.exit(1)
 
 
-def get_company_research(
-    company_name: str, role_title: str, job_url: str | None = None
-) -> dict:
+def get_company_address(company_name: str, role_location: str = "") -> dict:
     """
-    Use Claude API with web search to research the company.
-    Returns company info including address and context for the "why" paragraph.
+    Use Claude API with web search to find company headquarters address.
+    Returns address info for the cover letter header.
     """
     import anthropic
 
     client = anthropic.Anthropic()
 
-    job_context = ""
-    if job_url:
-        job_context = f"\nJob posting URL: {job_url}"
+    # Load and format the address lookup prompt
+    address_prompt = load_prompt("address_lookup_prompt.md").format(
+        company_name=company_name,
+        role_location_if_known=role_location,
+    )
 
-    # Load and format the research prompt
-    research_prompt = load_prompt("research_prompt.md").format(
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=500,
+        tools=[{"type": "web_search_20250305", "name": "web_search"}],
+        messages=[{"role": "user", "content": address_prompt}],
+    )
+
+    # Extract text from response
+    full_text = ""
+    for block in response.content:
+        if isinstance(block, TextBlock):
+            full_text += block.text
+
+    # Parse the response
+    result = {
+        "address_line1": f"{company_name} Hiring Team",
+        "address_line2": "",
+    }
+
+    # Try to extract structured address
+    if "ADDRESS_LINE1:" in full_text:
+        match = re.search(r"ADDRESS_LINE1:\s*(.+?)(?:\n|$)", full_text)
+        if match:
+            result["address_line1"] = match.group(1).strip()
+
+    if "ADDRESS_LINE2:" in full_text:
+        match = re.search(r"ADDRESS_LINE2:\s*(.+?)(?:\n|$)", full_text)
+        if match:
+            result["address_line2"] = match.group(1).strip()
+
+    return result
+
+
+def get_company_context(
+    company_name: str, role_title: str, job_description: str = ""
+) -> dict:
+    """
+    Use Claude API with web search to research the company.
+    Returns company context for generating the "why" paragraph.
+    """
+    import anthropic
+
+    client = anthropic.Anthropic()
+
+    # Format job description section
+    job_desc_section = ""
+    if job_description:
+        job_desc_section = f"\nJob Description:\n{job_description}"
+
+    # Load and format the company research prompt
+    research_prompt = load_prompt("company_research_prompt.md").format(
         company_name=company_name,
         role_title=role_title,
-        job_context=job_context,
+        job_description=job_desc_section,
     )
 
     response = client.messages.create(
@@ -98,41 +147,19 @@ def get_company_research(
         if isinstance(block, TextBlock):
             full_text += block.text
 
-    # Parse the response
-    result = {
-        "address_line1": f"{company_name} Hiring Team",
-        "address_line2": "",
-        "company_context": full_text,
-    }
-
-    # Try to extract structured address
-    if "ADDRESS_LINE1:" in full_text:
-        match = re.search(r"ADDRESS_LINE1:\s*(.+?)(?:\n|$)", full_text)
-        if match:
-            result["address_line1"] = match.group(1).strip()
-
-    if "ADDRESS_LINE2:" in full_text:
-        match = re.search(r"ADDRESS_LINE2:\s*(.+?)(?:\n|$)", full_text)
-        if match:
-            result["address_line2"] = match.group(1).strip()
-
-    if "COMPANY_CONTEXT:" in full_text:
-        match = re.search(r"COMPANY_CONTEXT:\s*(.+)", full_text, re.DOTALL)
-        if match:
-            result["company_context"] = match.group(1).strip()
-
-    return result
+    return {"company_context": full_text}
 
 
 def generate_why_paragraph(
     company_name: str,
     role_title: str,
     company_context: str,
+    job_description: str = "",
     custom_prompt: str | None = None,
 ) -> str:
     """
     Generate the "I want to work at X because..." paragraph.
-    Uses the company research context and optional custom instructions.
+    Uses the company research context, job description, and optional custom instructions.
     """
     import anthropic
 
@@ -150,6 +177,7 @@ def generate_why_paragraph(
             role_title=role_title,
             company_context=company_context,
             my_background=my_background,
+            job_description=job_description,
         )
 
     response = client.messages.create(
@@ -252,7 +280,12 @@ def main():
     parser = argparse.ArgumentParser(description="Generate customized cover letters")
     parser.add_argument("company", help="Company name")
     parser.add_argument("role", help="Job title/role")
-    parser.add_argument("--job-url", help="URL to job posting (optional)")
+    parser.add_argument(
+        "--job-description", help="Job description text (optional)"
+    )
+    parser.add_argument(
+        "--job-desc-file", type=Path, help="File containing job description"
+    )
     parser.add_argument(
         "--custom-prompt", help="Custom instructions for the 'why' paragraph"
     )
@@ -266,9 +299,12 @@ def main():
         "--output-dir", type=Path, default=OUTPUT_ROOT, help="Output directory root"
     )
     parser.add_argument(
+        "--role-location", help="Role location (e.g., 'San Francisco', 'Remote')"
+    )
+    parser.add_argument(
         "--skip-research",
         action="store_true",
-        help="Skip web research (use manual address)",
+        help="Skip web research (use manual address and no company context)",
     )
     parser.add_argument("--address1", help="Manual address line 1")
     parser.add_argument("--address2", help="Manual address line 2")
@@ -282,26 +318,37 @@ def main():
     if args.custom_prompt_file and args.custom_prompt_file.exists():
         custom_prompt = args.custom_prompt_file.read_text()
 
-    # Get company research (or use manual values)
+    # Load job description from file if specified
+    job_description = args.job_description or ""
+    if args.job_desc_file and args.job_desc_file.exists():
+        job_description = args.job_desc_file.read_text()
+
+    # Get company address and context (or use manual values)
     if args.skip_research:
-        research = {
-            "address_line1": args.address1 or f"{args.company}",
+        address = {
+            "address_line1": args.address1 or f"{args.company} Hiring Team",
             "address_line2": args.address2 or "",
-            "company_context": "",
         }
-        print(f"Skipping research, using provided address")
+        company_context = ""
+        print(f"Skipping research, using provided/default address")
     else:
+        # Get company address
+        print(f"Looking up address for {args.company}...")
+        role_location = args.role_location or ""
+        address = get_company_address(args.company, role_location)
+        print(f"Found address: {address['address_line1']}, {address['address_line2']}")
+
+        # Get company context
         print(f"Researching {args.company}...")
-        research = get_company_research(args.company, args.role, args.job_url)
-        print(
-            f"Found address: {research['address_line1']}, {research['address_line2']}"
-        )
+        context_result = get_company_context(args.company, args.role, job_description)
+        company_context = context_result["company_context"]
 
     print(f"Generating 'why {args.company}' paragraph...")
     why_paragraph = generate_why_paragraph(
         args.company,
         args.role,
-        research["company_context"],
+        company_context,
+        job_description,
         custom_prompt,
     )
 
@@ -318,8 +365,8 @@ def main():
     create_cover_letter(
         company_name=args.company,
         role_title=args.role,
-        address_line1=research["address_line1"],
-        address_line2=research["address_line2"],
+        address_line1=address["address_line1"],
+        address_line2=address["address_line2"],
         why_paragraph=why_paragraph,
         output_path=output_path,
         dry_run=args.dry_run,

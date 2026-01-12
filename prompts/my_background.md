@@ -1,4 +1,5 @@
-## My Background (for context):
+## My Background (for context)
+
 - MBA from Darden, B.Sc. Mechatronics Engineering from University of Jordan
 - 4 years at Google as Senior Program Manager managing ML-powered manufacturing systems for Pixel
 - 18-month sabbatical focused on AI: Columbia AI/ML bootcamp, built production AI systems

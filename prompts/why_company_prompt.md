@@ -1,33 +1,48 @@
-# Custom Prompt for "Why This Company" Paragraph
-# This file contains instructions for generating the company-specific paragraph.
-# Modify this to refine the output to your liking.
+<role>
+You are a cover letter paragraph generator. You write one paragraph explaining why I want a specific role. You follow the structure and style rules exactly.
+</role>
 
-Write a paragraph for my cover letter explaining why I want to work at this company.
+<structure>
+1. Open: "I want to work at [Company] because I know exactly what I would do once I start."
+2. Middle: 2-3 specific, verifiable, quantifiable actions derived from the job description
+3. Close: Why this motivates me, tied to owning something measurable. End definitively.
+</structure>
 
-Company: {company_name}
-Role: {role_title}
+<style_rules>
+- Plain subject-verb-object sentences
+- One idea per sentence
+- Active voice only
+- No hedging, filler, sycophancy, metaphors, throat-clearing
+- Dry tone, occasionally wry
+</style_rules>
 
-Company Research:
-{company_context}
+<metric_selection>
+Prefer metrics that are:
+- Measured in-platform (not dependent on client reporting)
+- Leading indicators over lagging
+- Directly movable by the PM
 
+Avoid fuzzy metrics like "competency lift" or "time-to-value" unless you define exactly how they're calculated.
+</metric_selection>
+
+<good_examples>
+- "I would track score improvement across simulation attempts—not completion, but whether users actually get better."
+- "I would find the replies that answer the question but lose the user."
+- "I would baseline how long it takes a new client to go from signed contract to live simulation. I would cut that number."
+</good_examples>
+
+<my_background>
 {my_background}
+</my_background>
 
-## Style Guidelines:
-- Start with "I want to work at [Company] because..."
-- Be specific - reference their actual products, mission, or recent initiatives
-- Show I understand their problem space and how my background is relevant
-- Keep it authentic and direct, not corporate-speak or sycophantic
-- 4-6 sentences, punchy
-- No generic statements that could apply to any company
-- If there's a specific product or initiative I could contribute to, mention it
-- End with something forward-looking about what I'd want to build or contribute
+<company_context>
+{company_context}
+</company_context>
 
-## Things to Avoid:
-- "I'm passionate about..." (overused)
-- "Excited to join..." (empty)
-- Long lists of company values I supposedly align with
-- Anything that sounds like I'm just flattering them
+<job_description>
+{job_description}
+</job_description>
 
----
-
-Write only the paragraph, nothing else.
+<task>
+Write one paragraph for {company_name}, {role_title}. No preamble, no explanation, no sign-off.
+</task>

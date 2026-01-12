@@ -6,9 +6,9 @@ Streamline cover letter generation for job applications.
 ## Phase 1: Cover Letter Generator
 
 Generates customized cover letters by:
-1. Researching the company via Claude API with web search
-2. Finding company headquarters address
-3. Generating a company-specific "why I want to work here" paragraph
+1. Looking up company headquarters address (via Claude API with web search)
+2. Researching the company and role (via Claude API with web search)
+3. Generating a company-specific "why I want to work here" paragraph (via Claude API)
 4. Creating a formatted .docx from your template
 
 ### Setup
@@ -17,8 +17,11 @@ Generates customized cover letters by:
 # Install dependencies
 pip install -r requirements.txt
 
-# Set your API key
+# Set your API key - Option 1: Environment variable
 export ANTHROPIC_API_KEY='your-key-here'
+
+# Set your API key - Option 2: .env file (recommended)
+echo "ANTHROPIC_API_KEY=your-key-here" > .env
 ```
 
 ### Usage
@@ -28,14 +31,24 @@ Basic usage:
 python generate_cover_letter.py "Scale AI" "Technical Program Manager"
 ```
 
-With job posting URL (for more context):
+With job description from file:
 ```bash
-python generate_cover_letter.py "Meta" "Product Manager, AI" --job-url "https://..."
+python generate_cover_letter.py "Meta" "Product Manager, AI" --job-desc-file job_description.txt
+```
+
+With job description inline:
+```bash
+python generate_cover_letter.py "OpenAI" "TPM" --job-description "Role involves..."
+```
+
+With role location (uses specific office address):
+```bash
+python generate_cover_letter.py "Anthropic" "Product Manager" --role-location "San Francisco"
 ```
 
 With custom prompt file:
 ```bash
-python generate_cover_letter.py "OpenAI" "TPM" --custom-prompt-file prompts/why_company_prompt.md
+python generate_cover_letter.py "OpenAI" "TPM" --custom-prompt-file my_custom_prompt.md
 ```
 
 Dry run (preview without creating file):
@@ -43,19 +56,24 @@ Dry run (preview without creating file):
 python generate_cover_letter.py "Anthropic" "TPM" --dry-run
 ```
 
-Skip research (manual address):
+Skip research (manual address, no company context):
 ```bash
 python generate_cover_letter.py "Startup Inc" "PM" --skip-research --address1 "123 Main St," --address2 "San Francisco, CA 94102"
 ```
 
 ### Output Structure
 
-Generated files are saved to:
+Generated files are saved to `~/Documents/resume/`:
 ```
-applications/
+~/Documents/resume/
 └── Company_Name/
-    └── Rami_Ibrahimi_2026-01-05_Company_Name.docx
+    ├── Rami_Ibrahimi_Company_Name_2026-01-12_Role_Title.docx  # Timestamped version
+    └── Ibrahimi_Rami_Cover_letter_Company_Name.docx           # Latest version (overwritten)
 ```
+
+**Two files are created:**
+- **Timestamped version:** Archives each cover letter with company, date, and role
+- **Latest version:** Always points to the most recent cover letter for that company
 
 ### Customizing the Template
 
@@ -67,9 +85,56 @@ The template is at `template/cover_letter_template.docx`. It uses these placehol
 - `{{ROLE_TITLE}}` - Job title and company
 - `{{WHY_COMPANY_PARAGRAPH}}` - Generated paragraph
 
-### Customizing the "Why" Paragraph
+### Customizing Prompts
 
-Edit `prompts/why_company_prompt.md` to refine how the paragraph is generated.
+All prompts are externalized in the `prompts/` directory:
+
+**`prompts/address_lookup_prompt.md`**
+- Controls how company addresses are found
+- Supports role location preference
+
+**`prompts/company_research_prompt.md`**
+- Defines what company information to research
+- Structured output: products, metrics, problems, recent activity, role context
+
+**`prompts/my_background.md`**
+- Your professional background and experience
+- Used as context for generating the "why" paragraph
+
+**`prompts/why_company_prompt.md`**
+- Controls structure and style of the cover letter paragraph
+- Defines opening, middle actions, and closing
+- Style rules: plain language, active voice, specific metrics
+
+### CLI Reference
+
+```
+usage: generate_cover_letter.py [-h] [--job-description TEXT]
+                                [--job-desc-file FILE]
+                                [--custom-prompt TEXT]
+                                [--custom-prompt-file FILE]
+                                [--dry-run] [--output-dir DIR]
+                                [--role-location LOCATION]
+                                [--skip-research]
+                                [--address1 TEXT] [--address2 TEXT]
+                                company role
+
+positional arguments:
+  company                    Company name
+  role                       Job title/role
+
+optional arguments:
+  --job-description TEXT     Job description text (inline)
+  --job-desc-file FILE       Job description from file
+  --custom-prompt TEXT       Custom paragraph prompt (inline)
+  --custom-prompt-file FILE  Custom paragraph prompt from file
+  --role-location LOCATION   Office location (e.g., "San Francisco", "Remote")
+  --dry-run                  Preview without creating files
+  --output-dir DIR           Output directory (default: ~/Documents/resume)
+  --skip-research            Skip API calls, use manual values
+  --address1 TEXT            Manual address line 1 (with --skip-research)
+  --address2 TEXT            Manual address line 2 (with --skip-research)
+```
 
 ## Roadmap
 
