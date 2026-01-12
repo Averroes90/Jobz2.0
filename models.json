@@ -1,0 +1,20 @@
+{
+  "default_model": "haiku",
+  "models": {
+    "haiku": {
+      "provider": "anthropic",
+      "model_id": "claude-haiku-4-5-20250514",
+      "description": "Fast, cheap"
+    },
+    "sonnet": {
+      "provider": "anthropic",
+      "model_id": "claude-sonnet-4-20250514",
+      "description": "Balanced"
+    },
+    "opus": {
+      "provider": "anthropic",
+      "model_id": "claude-opus-4-20250514",
+      "description": "Best quality"
+    }
+  }
+}

@@ -11,12 +11,14 @@ Environment:
 """
 
 import argparse
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from urllib import response
@@ -46,6 +48,17 @@ PLACEHOLDERS = {
 # Prompts directory
 PROMPTS_PATH = Path(__file__).parent / "prompts"
 
+# Models configuration file
+MODELS_CONFIG_PATH = Path(__file__).parent / "models.json"
+
+
+def load_models_config() -> dict:
+    """Load models configuration from JSON file."""
+    if not MODELS_CONFIG_PATH.exists():
+        raise FileNotFoundError(f"Models config not found: {MODELS_CONFIG_PATH}")
+    with open(MODELS_CONFIG_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
 
 def load_prompt(filename: str) -> str:
     """Load a prompt template from the prompts/ directory."""
@@ -63,7 +76,7 @@ def check_api_key():
         sys.exit(1)
 
 
-def get_company_address(company_name: str, role_location: str = "") -> dict:
+def get_company_address(company_name: str, role_location: str = "", model: str = "claude-haiku-4-5-20250514") -> dict:
     """
     Use Claude API with web search to find company headquarters address.
     Returns address info for the cover letter header.
@@ -79,7 +92,7 @@ def get_company_address(company_name: str, role_location: str = "") -> dict:
     )
 
     response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=model,
         max_tokens=500,
         tools=[{"type": "web_search_20250305", "name": "web_search"}],
         messages=[{"role": "user", "content": address_prompt}],
@@ -112,7 +125,7 @@ def get_company_address(company_name: str, role_location: str = "") -> dict:
 
 
 def get_company_context(
-    company_name: str, role_title: str, job_description: str = ""
+    company_name: str, role_title: str, job_description: str = "", model: str = "claude-sonnet-4-20250514"
 ) -> dict:
     """
     Use Claude API with web search to research the company.
@@ -135,7 +148,7 @@ def get_company_context(
     )
 
     response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=model,
         max_tokens=2000,
         tools=[{"type": "web_search_20250305", "name": "web_search"}],
         messages=[{"role": "user", "content": research_prompt}],
@@ -156,6 +169,7 @@ def generate_why_paragraph(
     company_context: str,
     job_description: str = "",
     custom_prompt: str | None = None,
+    model: str = "claude-sonnet-4-20250514",
 ) -> str:
     """
     Generate the "I want to work at X because..." paragraph.
@@ -181,7 +195,7 @@ def generate_why_paragraph(
         )
 
     response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model=model,
         max_tokens=500,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -277,6 +291,17 @@ def create_cover_letter(
 
 
 def main():
+    # Load models configuration
+    models_config = load_models_config()
+    available_models = list(models_config["models"].keys())
+    default_model = models_config.get("default_model", "haiku")
+
+    # Build model descriptions for help text
+    model_descriptions = ", ".join([
+        f"{name} ({models_config['models'][name]['description']})"
+        for name in available_models
+    ])
+
     parser = argparse.ArgumentParser(description="Generate customized cover letters")
     parser.add_argument("company", help="Company name")
     parser.add_argument("role", help="Job title/role")
@@ -302,6 +327,18 @@ def main():
         "--role-location", help="Role location (e.g., 'San Francisco', 'Remote')"
     )
     parser.add_argument(
+        "--model",
+        choices=available_models,
+        default=default_model,
+        help=f"Model to use for API calls: {model_descriptions}",
+    )
+    parser.add_argument(
+        "--delay",
+        type=int,
+        default=5,
+        help="Delay in seconds between API calls to avoid rate limiting (default: 5)",
+    )
+    parser.add_argument(
         "--skip-research",
         action="store_true",
         help="Skip web research (use manual address and no company context)",
@@ -312,6 +349,12 @@ def main():
     args = parser.parse_args()
 
     check_api_key()
+
+    # Get model configuration
+    model_config = models_config["models"][args.model]
+    model_id = model_config["model_id"]
+    provider = model_config["provider"]
+    print(f"Using model: {args.model} ({provider}: {model_id})")
 
     # Load custom prompt from file if specified
     custom_prompt = args.custom_prompt
@@ -335,13 +378,15 @@ def main():
         # Get company address
         print(f"Looking up address for {args.company}...")
         role_location = args.role_location or ""
-        address = get_company_address(args.company, role_location)
+        address = get_company_address(args.company, role_location, model_id)
         print(f"Found address: {address['address_line1']}, {address['address_line2']}")
+        time.sleep(args.delay)  # Rate limiting between API calls
 
         # Get company context
         print(f"Researching {args.company}...")
-        context_result = get_company_context(args.company, args.role, job_description)
+        context_result = get_company_context(args.company, args.role, job_description, model_id)
         company_context = context_result["company_context"]
+        time.sleep(args.delay)  # Rate limiting between API calls
 
     print(f"Generating 'why {args.company}' paragraph...")
     why_paragraph = generate_why_paragraph(
@@ -350,7 +395,9 @@ def main():
         company_context,
         job_description,
         custom_prompt,
+        model_id,
     )
+    time.sleep(args.delay)  # Rate limiting between API calls
 
     print(f"\nGenerated paragraph:\n{why_paragraph}\n")
 

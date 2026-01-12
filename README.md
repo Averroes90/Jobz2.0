@@ -46,6 +46,27 @@ With role location (uses specific office address):
 python generate_cover_letter.py "Anthropic" "Product Manager" --role-location "San Francisco"
 ```
 
+With model selection:
+```bash
+# Fast and cheap (default)
+python generate_cover_letter.py "Anthropic" "Product Manager" --model haiku
+
+# Balanced quality and cost
+python generate_cover_letter.py "Anthropic" "Product Manager" --model sonnet
+
+# Best quality
+python generate_cover_letter.py "Anthropic" "Product Manager" --model opus
+```
+
+With custom delay between API calls:
+```bash
+# Faster (2 seconds)
+python generate_cover_letter.py "Anthropic" "Product Manager" --delay 2
+
+# Slower to be safe (10 seconds)
+python generate_cover_letter.py "Anthropic" "Product Manager" --delay 10
+```
+
 With custom prompt file:
 ```bash
 python generate_cover_letter.py "OpenAI" "TPM" --custom-prompt-file my_custom_prompt.md
@@ -115,6 +136,8 @@ usage: generate_cover_letter.py [-h] [--job-description TEXT]
                                 [--custom-prompt-file FILE]
                                 [--dry-run] [--output-dir DIR]
                                 [--role-location LOCATION]
+                                [--model {haiku,sonnet,opus}]
+                                [--delay DELAY]
                                 [--skip-research]
                                 [--address1 TEXT] [--address2 TEXT]
                                 company role
@@ -129,12 +152,43 @@ optional arguments:
   --custom-prompt TEXT       Custom paragraph prompt (inline)
   --custom-prompt-file FILE  Custom paragraph prompt from file
   --role-location LOCATION   Office location (e.g., "San Francisco", "Remote")
+  --model {haiku,sonnet,opus} Model to use: haiku (fast, cheap), sonnet (balanced), opus (best quality)
+  --delay DELAY              Delay in seconds between API calls (default: 5)
   --dry-run                  Preview without creating files
   --output-dir DIR           Output directory (default: ~/Documents/resume)
   --skip-research            Skip API calls, use manual values
   --address1 TEXT            Manual address line 1 (with --skip-research)
   --address2 TEXT            Manual address line 2 (with --skip-research)
 ```
+
+### Model Configuration
+
+Models are defined in `models.json` with a provider-agnostic structure:
+
+```json
+{
+  "default_model": "haiku",
+  "models": {
+    "haiku": {
+      "provider": "anthropic",
+      "model_id": "claude-haiku-4-5-20250514",
+      "description": "Fast, cheap"
+    },
+    "sonnet": {
+      "provider": "anthropic",
+      "model_id": "claude-sonnet-4-20250514",
+      "description": "Balanced"
+    }
+  }
+}
+```
+
+**Adding new models:**
+1. Edit `models.json`
+2. Add a new entry with a short name, provider, model_id, and description
+3. The model will automatically appear in `--model` choices
+
+This structure supports multiple providers (Anthropic, OpenAI, Google, etc.)
 
 ## Roadmap
 
