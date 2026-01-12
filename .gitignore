@@ -5,3 +5,4 @@ main.pem
 config/credentials.json
 input/
 output/
+venv/

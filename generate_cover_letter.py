@@ -28,7 +28,7 @@ load_dotenv()
 
 # Configuration
 TEMPLATE_PATH = Path(__file__).parent / "template" / "cover_letter_template.docx"
-OUTPUT_ROOT = Path(__file__).parent / "applications"
+OUTPUT_ROOT = Path.home() / "Documents" / "resume"
 SCRIPTS_PATH = (
     Path(__file__).parent / "scripts"
 )  # Will copy scripts here for portability
@@ -42,6 +42,17 @@ PLACEHOLDERS = {
     "role_title": "{{ROLE_TITLE}}",
     "why_company_paragraph": "{{WHY_COMPANY_PARAGRAPH}}",
 }
+
+# Prompts directory
+PROMPTS_PATH = Path(__file__).parent / "prompts"
+
+
+def load_prompt(filename: str) -> str:
+    """Load a prompt template from the prompts/ directory."""
+    prompt_path = PROMPTS_PATH / filename
+    if not prompt_path.exists():
+        raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
+    return prompt_path.read_text(encoding="utf-8")
 
 
 def check_api_key():
@@ -67,29 +78,12 @@ def get_company_research(
     if job_url:
         job_context = f"\nJob posting URL: {job_url}"
 
-    research_prompt = f"""Research {company_name} for a job application to their {role_title} position.{job_context}
-
-I need the following information:
-
-1. **Company headquarters address** - Find the main office or headquarters address. Format as:
-   - address_line1: Street address (e.g., "548 Market St,")
-   - address_line2: City, State ZIP (e.g., "San Francisco, CA 94104")
-   
-2. **Company context for cover letter** - Research what makes this company unique:
-   - What are their main products/services?
-   - What is their mission or what problems do they solve?
-   - Any recent news, launches, or initiatives?
-   - What is their culture or values?
-   - What would be compelling reasons someone would want to work there?
-
-Return your findings in this exact format:
-
-ADDRESS_LINE1: [street address with comma]
-ADDRESS_LINE2: [city, state zip]
-
-COMPANY_CONTEXT:
-[Detailed notes about the company - 3-5 paragraphs of research findings that would help write a compelling "why I want to work here" paragraph]
-"""
+    # Load and format the research prompt
+    research_prompt = load_prompt("research_prompt.md").format(
+        company_name=company_name,
+        role_title=role_title,
+        job_context=job_context,
+    )
 
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
@@ -144,33 +138,19 @@ def generate_why_paragraph(
 
     client = anthropic.Anthropic()
 
-    # Default prompt style - you can customize this
-    base_instructions = (
-        custom_prompt
-        or """
-Write a paragraph for my cover letter explaining why I want to work at this company.
+    # Load background and prompt templates
+    my_background = load_prompt("my_background.md")
 
-Style guidelines:
-- Start with "I want to work at [Company] because..."  
-- Be specific about the company - reference their actual products, mission, or recent work
-- Connect my background to what they do (I have experience in operations, supply chain, product, and AI/ML)
-- Show I've done my homework without being sycophantic
-- Keep it authentic and conversational, not corporate-speak
-- 4-6 sentences, punchy and direct
-- No generic statements that could apply to any company
-"""
-    )
-
-    prompt = f"""Company: {company_name}
-Role: {role_title}
-
-Company Research:
-{company_context}
-
-{base_instructions}
-
-Write only the paragraph, nothing else.
-"""
+    # Use custom prompt if provided, otherwise use default template
+    if custom_prompt:
+        prompt = custom_prompt
+    else:
+        prompt = load_prompt("why_company_prompt.md").format(
+            company_name=company_name,
+            role_title=role_title,
+            company_context=company_context,
+            my_background=my_background,
+        )
 
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
@@ -327,10 +307,11 @@ def main():
 
     print(f"\nGenerated paragraph:\n{why_paragraph}\n")
 
-    # Build output path: applications/CompanyName/Rami_Ibrahimi_2026-01-05_CompanyName.docx
+    # Build output path: applications/CompanyName/Rami_Ibrahimi_CompanyName_2026-01-05_RoleTitle.docx
     safe_company_name = re.sub(r"[^\w\s-]", "", args.company).replace(" ", "_")
+    safe_role = re.sub(r"[^\w\s-]", "", args.role).replace(" ", "_")
     date_str = datetime.now().strftime("%Y-%m-%d")
-    filename = f"Rami_Ibrahimi_{date_str}_{safe_company_name}.docx"
+    filename = f"Rami_Ibrahimi_{safe_company_name}_{date_str}_{safe_role}.docx"
     output_path = args.output_dir / safe_company_name / filename
 
     print(f"Creating cover letter at {output_path}...")
@@ -346,6 +327,12 @@ def main():
 
     if not args.dry_run:
         print(f"\n✓ Cover letter created: {output_path}")
+
+        # Also create/overwrite the latest active version for this company
+        latest_filename = f"Ibrahimi_Rami_Cover_letter_{safe_company_name}.docx"
+        latest_path = args.output_dir / safe_company_name / latest_filename
+        shutil.copy2(output_path, latest_path)
+        print(f"✓ Latest version updated: {latest_path}")
 
 
 if __name__ == "__main__":

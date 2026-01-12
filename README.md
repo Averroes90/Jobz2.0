@@ -1,3 +1,4 @@
+<!-- markdownlint-disable -->
 # Job Application Tool
 
 Streamline cover letter generation for job applications.
@@ -82,3 +83,4 @@ Edit `prompts/why_company_prompt.md` to refine how the paragraph is generated.
 - LinkedIn job search automation
 - Randomized behavior to avoid detection
 - Auto-apply for "Easy Apply" jobs
+<!-- markdownlint-enable -->
