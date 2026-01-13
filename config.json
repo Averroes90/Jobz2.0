@@ -1,0 +1,33 @@
+{
+    "model_definitions": {
+        "haiku": {
+            "provider": "anthropic",
+            "model_id": "claude-haiku-4-5-20250514",
+            "description": "Fast, cheap"
+        },
+        "sonnet": {
+            "provider": "anthropic",
+            "model_id": "claude-sonnet-4-20250514",
+            "description": "Balanced"
+        },
+        "opus": {
+            "provider": "anthropic",
+            "model_id": "claude-opus-4-20250514",
+            "description": "Best quality"
+        }
+    },
+    "task_models": {
+        "address_lookup": "haiku",
+        "company_research": "sonnet",
+        "why_paragraph": "sonnet",
+        "style_rewrite": "haiku"
+    },
+    "api_settings": {
+        "retry_attempts": 3,
+        "retry_wait_seconds": 90
+    },
+    "output": {
+        "root_directory": "~/Documents/resume",
+        "filename_prefix": "Rami_Ibrahimi"
+    }
+}

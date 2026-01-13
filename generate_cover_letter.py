@@ -22,18 +22,17 @@ import time
 from datetime import datetime
 from pathlib import Path
 from urllib import response
+import anthropic
 from anthropic.types import TextBlock
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Configuration
+# Configuration paths
 TEMPLATE_PATH = Path(__file__).parent / "template" / "cover_letter_template.docx"
-OUTPUT_ROOT = Path.home() / "Documents" / "resume"
-SCRIPTS_PATH = (
-    Path(__file__).parent / "scripts"
-)  # Will copy scripts here for portability
+SCRIPTS_PATH = Path(__file__).parent / "scripts"
+CONFIG_PATH = Path(__file__).parent / "config.json"
 
 # Placeholder markers in the template
 PLACEHOLDERS = {
@@ -48,16 +47,60 @@ PLACEHOLDERS = {
 # Prompts directory
 PROMPTS_PATH = Path(__file__).parent / "prompts"
 
-# Models configuration file
-MODELS_CONFIG_PATH = Path(__file__).parent / "models.json"
+
+def load_config():
+    """Load application configuration from JSON file.
+
+    Returns:
+        tuple: (config dict, get_model_id function)
+    """
+    if not CONFIG_PATH.exists():
+        raise FileNotFoundError(f"Config file not found: {CONFIG_PATH}")
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    # Expand home directory in output path
+    if "output" in config and "root_directory" in config["output"]:
+        config["output"]["root_directory"] = str(Path(config["output"]["root_directory"]).expanduser())
+
+    def get_model_id(task_name: str, model_override: str = None) -> str:
+        """Get model ID for a given task name.
+
+        Args:
+            task_name: Task name (e.g., "address_lookup", "company_research")
+            model_override: Optional model name to override task default
+
+        Returns:
+            str: Full model ID (e.g., "claude-haiku-4-5-20250514")
+        """
+        model_name = model_override if model_override else config["task_models"][task_name]
+        return config["model_definitions"][model_name]["model_id"]
+
+    return config, get_model_id
 
 
-def load_models_config() -> dict:
-    """Load models configuration from JSON file."""
-    if not MODELS_CONFIG_PATH.exists():
-        raise FileNotFoundError(f"Models config not found: {MODELS_CONFIG_PATH}")
-    with open(MODELS_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+def call_with_retry(api_call_func, max_retries=3, wait_seconds=90):
+    """Execute API call with retry logic for rate limits."""
+    for attempt in range(max_retries):
+        try:
+            return api_call_func()
+        except anthropic.RateLimitError as e:
+            print(f"Rate limit hit at {datetime.now().strftime('%H:%M:%S')}. (attempt {attempt + 1}/{max_retries})")
+
+            # Print rate limit headers if available
+            if hasattr(e, 'response') and hasattr(e.response, 'headers'):
+                headers = e.response.headers
+                print("Rate limit headers:")
+                for key, value in headers.items():
+                    if 'ratelimit' in key.lower() or 'rate-limit' in key.lower():
+                        print(f"  {key}: {value}")
+
+            if attempt < max_retries - 1:
+                print(f"Waiting {wait_seconds}s...")
+                time.sleep(wait_seconds)
+                print(f"Resuming at {datetime.now().strftime('%H:%M:%S')}")
+            else:
+                print(f"Rate limit still hit after {max_retries} attempts. Giving up.")
+                raise
 
 
 def load_prompt(filename: str) -> str:
@@ -76,12 +119,15 @@ def check_api_key():
         sys.exit(1)
 
 
-def get_company_address(company_name: str, role_location: str = "", model: str = "claude-haiku-4-5-20250514") -> dict:
+def get_company_address(company_name: str, role_location: str = "", model: str = None, config: dict = None) -> dict:
     """
     Use Claude API with web search to find company headquarters address.
     Returns address info for the cover letter header.
     """
-    import anthropic
+    if config is None:
+        config = load_config()
+    if model is None:
+        model = config["models"]["address_lookup"]
 
     client = anthropic.Anthropic()
 
@@ -91,11 +137,15 @@ def get_company_address(company_name: str, role_location: str = "", model: str =
         role_location_if_known=role_location,
     )
 
-    response = client.messages.create(
-        model=model,
-        max_tokens=500,
-        tools=[{"type": "web_search_20250305", "name": "web_search"}],
-        messages=[{"role": "user", "content": address_prompt}],
+    response = call_with_retry(
+        lambda: client.messages.create(
+            model=model,
+            max_tokens=500,
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            messages=[{"role": "user", "content": address_prompt}],
+        ),
+        max_retries=config["api_settings"]["retry_attempts"],
+        wait_seconds=config["api_settings"]["retry_wait_seconds"]
     )
 
     # Extract text from response
@@ -125,13 +175,16 @@ def get_company_address(company_name: str, role_location: str = "", model: str =
 
 
 def get_company_context(
-    company_name: str, role_title: str, job_description: str = "", model: str = "claude-sonnet-4-20250514"
+    company_name: str, role_title: str, job_description: str = "", model: str = None, config: dict = None
 ) -> dict:
     """
     Use Claude API with web search to research the company.
     Returns company context for generating the "why" paragraph.
     """
-    import anthropic
+    if config is None:
+        config = load_config()
+    if model is None:
+        model = config["models"]["company_research"]
 
     client = anthropic.Anthropic()
 
@@ -147,11 +200,15 @@ def get_company_context(
         job_description=job_desc_section,
     )
 
-    response = client.messages.create(
-        model=model,
-        max_tokens=2000,
-        tools=[{"type": "web_search_20250305", "name": "web_search"}],
-        messages=[{"role": "user", "content": research_prompt}],
+    response = call_with_retry(
+        lambda: client.messages.create(
+            model=model,
+            max_tokens=2000,
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            messages=[{"role": "user", "content": research_prompt}],
+        ),
+        max_retries=config["api_settings"]["retry_attempts"],
+        wait_seconds=config["api_settings"]["retry_wait_seconds"]
     )
 
     # Extract text from response
@@ -169,13 +226,17 @@ def generate_why_paragraph(
     company_context: str,
     job_description: str = "",
     custom_prompt: str | None = None,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = None,
+    config: dict = None,
 ) -> str:
     """
     Generate the "I want to work at X because..." paragraph.
     Uses the company research context, job description, and optional custom instructions.
     """
-    import anthropic
+    if config is None:
+        config = load_config()
+    if model is None:
+        model = config["models"]["why_paragraph"]
 
     client = anthropic.Anthropic()
 
@@ -194,10 +255,69 @@ def generate_why_paragraph(
             job_description=job_description,
         )
 
-    response = client.messages.create(
-        model=model,
-        max_tokens=500,
-        messages=[{"role": "user", "content": prompt}],
+    # Debug: dump all inputs before API call
+    debug_output = f"""
+=== WHY PARAGRAPH API CALL DEBUG ===
+Timestamp: {datetime.now().isoformat()}
+
+company_name: {company_name}
+role_title: {role_title}
+
+my_background length: {len(my_background)} chars
+company_context length: {len(company_context)} chars
+job_description length: {len(job_description)} chars
+prompt length: {len(prompt)} chars
+
+=== FULL PROMPT BEING SENT ===
+{prompt}
+
+=== END DEBUG ===
+"""
+    Path("debug_why_paragraph.txt").write_text(debug_output, encoding="utf-8")
+    print(f"Debug: Why paragraph inputs saved to debug_why_paragraph.txt")
+
+    response = call_with_retry(
+        lambda: client.messages.create(
+            model=model,
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        ),
+        max_retries=config["api_settings"]["retry_attempts"],
+        wait_seconds=config["api_settings"]["retry_wait_seconds"]
+    )
+
+    block = response.content[0]
+    if isinstance(block, TextBlock):
+        return block.text.strip()
+    return ""
+
+
+def rewrite_for_style(
+    paragraph: str,
+    model: str = None,
+    config: dict = None,
+) -> str:
+    """
+    Rewrite a paragraph for better style and readability.
+    Uses Haiku model for fast, simple rewrites without web search.
+    """
+    if config is None:
+        config, _ = load_config()
+
+    client = anthropic.Anthropic()
+
+    # Load style rewrite prompt
+    prompt_template = load_prompt("style_rewrite_prompt.md")
+    prompt = prompt_template.format(paragraph=paragraph)
+
+    response = call_with_retry(
+        lambda: client.messages.create(
+            model=model,
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        ),
+        max_retries=config["api_settings"]["retry_attempts"],
+        wait_seconds=config["api_settings"]["retry_wait_seconds"]
     )
 
     block = response.content[0]
@@ -291,16 +411,18 @@ def create_cover_letter(
 
 
 def main():
-    # Load models configuration
-    models_config = load_models_config()
-    available_models = list(models_config["models"].keys())
-    default_model = models_config.get("default_model", "haiku")
+    # Load configurations
+    config, get_model_id = load_config()
+    available_models = list(config["model_definitions"].keys())
 
     # Build model descriptions for help text
     model_descriptions = ", ".join([
-        f"{name} ({models_config['models'][name]['description']})"
+        f"{name} ({config['model_definitions'][name]['description']})"
         for name in available_models
     ])
+
+    # Get output directory from config
+    output_root = Path(config["output"]["root_directory"])
 
     parser = argparse.ArgumentParser(description="Generate customized cover letters")
     parser.add_argument("company", help="Company name")
@@ -321,7 +443,7 @@ def main():
         "--dry-run", action="store_true", help="Preview without creating file"
     )
     parser.add_argument(
-        "--output-dir", type=Path, default=OUTPUT_ROOT, help="Output directory root"
+        "--output-dir", type=Path, default=output_root, help="Output directory root"
     )
     parser.add_argument(
         "--role-location", help="Role location (e.g., 'San Francisco', 'Remote')"
@@ -329,8 +451,8 @@ def main():
     parser.add_argument(
         "--model",
         choices=available_models,
-        default=default_model,
-        help=f"Model to use for API calls: {model_descriptions}",
+        default=None,
+        help=f"Model to use for all API calls (overrides task-specific defaults): {model_descriptions}",
     )
     parser.add_argument(
         "--delay",
@@ -350,11 +472,11 @@ def main():
 
     check_api_key()
 
-    # Get model configuration
-    model_config = models_config["models"][args.model]
-    model_id = model_config["model_id"]
-    provider = model_config["provider"]
-    print(f"Using model: {args.model} ({provider}: {model_id})")
+    # Display model configuration
+    if args.model:
+        print(f"Using model override: {args.model} for all tasks")
+    else:
+        print("Using task-specific models from config")
 
     # Load custom prompt from file if specified
     custom_prompt = args.custom_prompt
@@ -378,34 +500,47 @@ def main():
         # Get company address
         print(f"Looking up address for {args.company}...")
         role_location = args.role_location or ""
-        address = get_company_address(args.company, role_location, model_id)
+        address_model_id = get_model_id("address_lookup", args.model)
+        address = get_company_address(args.company, role_location, address_model_id, config)
         print(f"Found address: {address['address_line1']}, {address['address_line2']}")
-        time.sleep(args.delay)  # Rate limiting between API calls
 
         # Get company context
         print(f"Researching {args.company}...")
-        context_result = get_company_context(args.company, args.role, job_description, model_id)
+        research_model_id = get_model_id("company_research", args.model)
+        context_result = get_company_context(args.company, args.role, job_description, research_model_id, config)
         company_context = context_result["company_context"]
-        time.sleep(args.delay)  # Rate limiting between API calls
+
+        # Debug: write company context to file
+        Path("debug_context.txt").write_text(company_context, encoding="utf-8")
+        print(f"Debug: Company context saved to debug_context.txt")
 
     print(f"Generating 'why {args.company}' paragraph...")
+    paragraph_model_id = get_model_id("why_paragraph", args.model)
     why_paragraph = generate_why_paragraph(
         args.company,
         args.role,
         company_context,
         job_description,
         custom_prompt,
-        model_id,
+        paragraph_model_id,
+        config,
     )
-    time.sleep(args.delay)  # Rate limiting between API calls
 
     print(f"\nGenerated paragraph:\n{why_paragraph}\n")
 
-    # Build output path: applications/CompanyName/Rami_Ibrahimi_CompanyName_2026-01-05_RoleTitle.docx
+    # Rewrite for style
+    time.sleep(args.delay)
+    print(f"Rewriting for style...")
+    style_model_id = get_model_id("style_rewrite", args.model)
+    final_paragraph = rewrite_for_style(why_paragraph, style_model_id, config)
+    print(f"\nFinal paragraph:\n{final_paragraph}\n")
+
+    # Build output path: applications/CompanyName/FilenamePrefix_CompanyName_2026-01-05_RoleTitle.docx
+    filename_prefix = config["output"]["filename_prefix"]
     safe_company_name = re.sub(r"[^\w\s-]", "", args.company).replace(" ", "_")
     safe_role = re.sub(r"[^\w\s-]", "", args.role).replace(" ", "_")
     date_str = datetime.now().strftime("%Y-%m-%d")
-    filename = f"Rami_Ibrahimi_{safe_company_name}_{date_str}_{safe_role}.docx"
+    filename = f"{filename_prefix}_{safe_company_name}_{date_str}_{safe_role}.docx"
     output_path = args.output_dir / safe_company_name / filename
 
     print(f"Creating cover letter at {output_path}...")
@@ -414,7 +549,7 @@ def main():
         role_title=args.role,
         address_line1=address["address_line1"],
         address_line2=address["address_line2"],
-        why_paragraph=why_paragraph,
+        why_paragraph=final_paragraph,
         output_path=output_path,
         dry_run=args.dry_run,
     )
@@ -423,7 +558,7 @@ def main():
         print(f"\n✓ Cover letter created: {output_path}")
 
         # Also create/overwrite the latest active version for this company
-        latest_filename = f"Ibrahimi_Rami_Cover_letter_{safe_company_name}.docx"
+        latest_filename = f"{filename_prefix}_Cover_letter_{safe_company_name}.docx"
         latest_path = args.output_dir / safe_company_name / latest_filename
         shutil.copy2(output_path, latest_path)
         print(f"✓ Latest version updated: {latest_path}")

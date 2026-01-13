@@ -1,0 +1,113 @@
+
+=== WHY PARAGRAPH API CALL DEBUG ===
+Timestamp: 2026-01-13T13:09:22.130192
+
+company_name: Oatly
+role_title: Director Corporate Development
+
+my_background length: 1713 chars
+company_context length: 3023 chars
+job_description length: 0 chars
+prompt length: 6289 chars
+
+=== FULL PROMPT BEING SENT ===
+<role>
+You are a cover letter paragraph generator. You write one paragraph explaining why I want a specific role. You follow the structure and style rules exactly.
+</role>
+
+<structure>
+1. Open: "I want to work at [Company] because I know exactly what I would do once I start."
+2. Middle: 2-3 specific, verifiable, quantifiable actions derived from the job description
+3. Close: Why this motivates me, tied to owning something measurable. End definitively.
+</structure>
+
+<style_rules>
+- Plain subject-verb-object sentences
+- One idea per sentence
+- Active voice only
+- No hedging, filler, sycophancy, metaphors, throat-clearing
+- Dry tone, occasionally wry
+</style_rules>
+
+<metric_selection>
+Prefer metrics that are:
+- Measured in-platform (not dependent on client reporting)
+- Leading indicators over lagging
+- Directly movable by the PM
+
+Avoid fuzzy metrics like "competency lift" or "time-to-value" unless you define exactly how they're calculated.
+</metric_selection>
+
+<good_examples>
+- "I would track score improvement across simulation attempts—not completion, but whether users actually get better."
+- "I would find the replies that answer the question but lose the user."
+- "I would baseline how long it takes a new client to go from signed contract to live simulation. I would cut that number."
+</good_examples>
+
+<my_background>
+<background>
+
+<career_arc>
+I started as a mechatronics engineer in Jordan. I moved into operations and supply chain at Philip Morris, managing manufacturing affiliates and building export supply chains across the Middle East. I got my MBA at Darden, then joined Google as a Senior Program Manager. I spent four years on Pixel and wearables—building budget models, managing cost and headcount plans, working with Foxconn cross-regionally, and leading a data science team that built predictive algorithms for cell qualification. Eighteen months ago I left Google to focus on AI full-time.
+</career_arc>
+
+<why_ai>
+Software needs clean inputs but the real world doesn't provide them. I spent years building systems that tried to bridge that gap. Tools like classifiers and embedding models now make it tractable. I took a sabbatical to build on my technical foundation.
+</why_ai>
+
+<sabbatical_work>
+I completed Columbia's AI and Machine Learning Bootcamp and got hands-on with TensorFlow and PyTorch. Then I started building. I made a multi-model API gateway, local inference pipelines with llama.cpp and Ollama, and an Arabic-language LLM platform for a Jordanian institution.
+</sabbatical_work>
+
+<what_i_do_well>
+I can scope technical work with engineers and explain tradeoffs to business stakeholders. I have built AI systems and run operations that relied on them. I define KPIs, set up operating procedures, and bring structure to ambiguous situations. I have done this across functions and geographies.
+</what_i_do_well>
+
+<what_motivates_me>
+I want a metric I can own. Something measurable and movable. I want to be close to the teams shaping how AI gets built and deployed.
+</what_motivates_me>
+
+</background>
+
+</my_background>
+
+<company_context>
+I'll research Oatly to provide specific, actionable insights for a Director Corporate Development application. Let me start with understanding their current business and recent developments.**PRODUCTS_AND_USERS:**
+
+Oatly operates in over 20 markets with a product portfolio that includes oat drinks, yogurt alternatives, ice cream, cooking cream, mayonnaise, custard, and spread. Their products are available in 60,000 retail stores, 32,200 coffee shops globally, including 11,000 coffee shops in China and 6,000+ US locations including Starbucks. The company's Barista Edition oat milk built early momentum by positioning itself as the preferred choice for specialty coffee shops and baristas.
+
+**METRICS_THIS_ROLE_COULD_OWN:**
+- Gross margin improvement: reached 28.8% in Q4 2024 (up 5.4 percentage points YoY), with a long-term target of 35-40%
+- Regional revenue growth: Greater China saw 38% revenue jump to $30M in Q1 2025, while Europe showed 12% growth
+- Volume growth metrics: Q4 2024 saw 9.9% increase to 153.2 million liters sold
+- Profitability targets: projected adjusted EBITDA of $5-15 million for 2025 with 2-4% constant currency revenue growth
+- Market share expansion: currently holds 17% of US plant-based milk market, competing with almond milk's 48% dominance
+
+**KNOWN_PROBLEMS_OR_GAPS:**
+- UK advertising ban in 2022 following 109 consumer complaints about unsubstantiated environmental claims
+- Supply chain vulnerabilities: customer sourcing changes expected to impact 2025 growth by 300 basis points
+- Category-wide challenges: plant-based milk sales fell 7.2% in 2023, attributed to price hikes and consumer perceptions about high sugar content and unfamiliar ingredients
+- Rising competition from affordable private label oat milk brands pressuring market share and pricing
+
+**RECENT_ACTIVITY:**
+Oatly is exploring a China business carveout worth ~$200M with JP Morgan as advisor, driven by uncertainties over the Chinese market and tariff risks. The company discontinued construction of a China manufacturing facility and closed its Singapore facility as part of an asset-light strategy.
+
+**ROLE_CONTEXT:**
+A Director Corporate Development role would likely focus on strategic partnerships, acquisitions, and market expansion initiatives. The China carveout discussions involve strategic players and private equity funds, with Chinese beverage maker Genki Forest among interested parties. Recent partnerships include expanding regenerative agriculture programs with suppliers like Grain Millers Canada.
+
+**RAW_NOTES:**
+- Complex ownership structure: Blackstone (7%), Verlinvest, China Resources (45.9%), plus celebrity investors like Oprah and Jay-Z
+- Global production capacity of 450 million liters annually with 42 registered patents in oat processing technology
+- Strong sustainability positioning: 86% lower emissions than dairy milk (0.44 vs 3.15 kg CO₂e per liter)
+- Recent financial restructuring: issued SEK 1,700 million Nordic Bonds to optimize capital structure and reduce debt costs
+</company_context>
+
+<job_description>
+
+</job_description>
+
+<task>
+Write one paragraph for Oatly, Director Corporate Development. No preamble, no explanation, no sign-off.
+</task>
+
+=== END DEBUG ===

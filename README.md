@@ -9,7 +9,8 @@ Generates customized cover letters by:
 1. Looking up company headquarters address (via Claude API with web search)
 2. Researching the company and role (via Claude API with web search)
 3. Generating a company-specific "why I want to work here" paragraph (via Claude API)
-4. Creating a formatted .docx from your template
+4. Rewriting the paragraph for style and clarity (via Claude API)
+5. Creating a formatted .docx from your template
 
 ### Setup
 
@@ -46,16 +47,19 @@ With role location (uses specific office address):
 python generate_cover_letter.py "Anthropic" "Product Manager" --role-location "San Francisco"
 ```
 
-With model selection:
+With model override (optional - uses task-specific defaults if not specified):
 ```bash
-# Fast and cheap (default)
+# Override all tasks to use haiku (fast and cheap)
 python generate_cover_letter.py "Anthropic" "Product Manager" --model haiku
 
-# Balanced quality and cost
+# Override all tasks to use sonnet (balanced)
 python generate_cover_letter.py "Anthropic" "Product Manager" --model sonnet
 
-# Best quality
+# Override all tasks to use opus (best quality)
 python generate_cover_letter.py "Anthropic" "Product Manager" --model opus
+
+# No --model flag: uses task-specific defaults from config.json
+python generate_cover_letter.py "Anthropic" "Product Manager"
 ```
 
 With custom delay between API calls:
@@ -84,17 +88,19 @@ python generate_cover_letter.py "Startup Inc" "PM" --skip-research --address1 "1
 
 ### Output Structure
 
-Generated files are saved to `~/Documents/resume/`:
+Generated files are saved to `~/Documents/resume/` (configurable in `config.json`):
 ```
 ~/Documents/resume/
 └── Company_Name/
-    ├── Rami_Ibrahimi_Company_Name_2026-01-12_Role_Title.docx  # Timestamped version
-    └── Ibrahimi_Rami_Cover_letter_Company_Name.docx           # Latest version (overwritten)
+    ├── Rami_Ibrahimi_Company_Name_2026-01-13_Role_Title.docx  # Timestamped version
+    └── Rami_Ibrahimi_Cover_letter_Company_Name.docx           # Latest version (overwritten)
 ```
 
 **Two files are created:**
 - **Timestamped version:** Archives each cover letter with company, date, and role
 - **Latest version:** Always points to the most recent cover letter for that company
+
+**Note:** Filename prefix is configurable via `config.json` (`output.filename_prefix`)
 
 ### Customizing the Template
 
@@ -127,6 +133,11 @@ All prompts are externalized in the `prompts/` directory:
 - Defines opening, middle actions, and closing
 - Style rules: plain language, active voice, specific metrics
 
+**`prompts/style_rewrite_prompt.md`**
+- Post-processing rules for the generated paragraph
+- Enforces formatting constraints (sentence count, structure)
+- Simplifies language while preserving metrics
+
 ### CLI Reference
 
 ```
@@ -152,7 +163,7 @@ optional arguments:
   --custom-prompt TEXT       Custom paragraph prompt (inline)
   --custom-prompt-file FILE  Custom paragraph prompt from file
   --role-location LOCATION   Office location (e.g., "San Francisco", "Remote")
-  --model {haiku,sonnet,opus} Model to use: haiku (fast, cheap), sonnet (balanced), opus (best quality)
+  --model {haiku,sonnet,opus} Override model for all API calls (default: task-specific from config.json)
   --delay DELAY              Delay in seconds between API calls (default: 5)
   --dry-run                  Preview without creating files
   --output-dir DIR           Output directory (default: ~/Documents/resume)
@@ -161,14 +172,13 @@ optional arguments:
   --address2 TEXT            Manual address line 2 (with --skip-research)
 ```
 
-### Model Configuration
+### Configuration
 
-Models are defined in `models.json` with a provider-agnostic structure:
+All configuration is centralized in `config.json`:
 
 ```json
 {
-  "default_model": "haiku",
-  "models": {
+  "model_definitions": {
     "haiku": {
       "provider": "anthropic",
       "model_id": "claude-haiku-4-5-20250514",
@@ -178,17 +188,64 @@ Models are defined in `models.json` with a provider-agnostic structure:
       "provider": "anthropic",
       "model_id": "claude-sonnet-4-20250514",
       "description": "Balanced"
+    },
+    "opus": {
+      "provider": "anthropic",
+      "model_id": "claude-opus-4-20250514",
+      "description": "Best quality"
     }
+  },
+  "task_models": {
+    "address_lookup": "haiku",
+    "company_research": "sonnet",
+    "why_paragraph": "sonnet",
+    "style_rewrite": "haiku"
+  },
+  "api_settings": {
+    "retry_attempts": 3,
+    "retry_wait_seconds": 90
+  },
+  "output": {
+    "root_directory": "~/Documents/resume",
+    "filename_prefix": "Rami_Ibrahimi"
   }
 }
 ```
 
-**Adding new models:**
-1. Edit `models.json`
-2. Add a new entry with a short name, provider, model_id, and description
-3. The model will automatically appear in `--model` choices
+**Configuration sections:**
 
-This structure supports multiple providers (Anthropic, OpenAI, Google, etc.)
+- **`model_definitions`**: Available models with provider, model_id, and description
+- **`task_models`**: Maps each task to its default model (address_lookup, company_research, why_paragraph, style_rewrite)
+- **`api_settings`**: Retry logic configuration for rate limiting
+- **`output`**: Output directory and filename prefix
+
+**Customizing:**
+
+1. **Add new models**: Edit `model_definitions` with provider-agnostic structure (supports Anthropic, OpenAI, Google, etc.)
+2. **Change task defaults**: Edit `task_models` to use different models for different tasks
+3. **Adjust retry logic**: Modify `retry_attempts` and `retry_wait_seconds`
+4. **Change output location**: Update `root_directory` and `filename_prefix`
+
+**Model selection behavior:**
+
+- Without `--model` flag: Each task uses its default from `task_models`
+- With `--model` flag: All tasks use the specified model (overrides defaults)
+
+## Browser Extension
+
+A Chrome extension for scanning form fields on job application pages is available in `browser-extension/`.
+
+**Features:**
+- Scans all visible form fields (input, select, textarea)
+- Extracts field labels, types, required status, and current values
+- Simple popup UI with JSON output
+
+**Installation:**
+1. Open Chrome and go to `chrome://extensions/`
+2. Enable "Developer mode"
+3. Click "Load unpacked" and select the `browser-extension/` directory
+
+See [browser-extension/README.md](browser-extension/README.md) for detailed usage.
 
 ## Roadmap
 
