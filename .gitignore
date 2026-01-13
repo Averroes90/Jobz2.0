@@ -8,4 +8,5 @@ output/
 venv/
 prompts/
 template/
-debug*
+debug*.*
+debug_*
