@@ -27,7 +27,8 @@
         "retry_wait_seconds": 90
     },
     "output": {
-        "root_directory": "~/Documents/resume",
+        "root_directory": "./user-data/applications",
         "filename_prefix": "Rami_Ibrahimi"
-    }
+    },
+    "user_data_directory": "./user-data"
 }
