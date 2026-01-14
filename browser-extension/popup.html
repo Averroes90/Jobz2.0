@@ -39,6 +39,23 @@
       cursor: not-allowed;
     }
 
+    button.secondary {
+      background: #34a853;
+      margin-top: 8px;
+    }
+
+    button.secondary:hover {
+      background: #2d8e47;
+    }
+
+    #sendButton {
+      display: none;
+    }
+
+    #sendButton.show {
+      display: block;
+    }
+
     #results {
       margin-top: 16px;
       padding: 12px;
@@ -75,6 +92,7 @@
 <body>
   <h1>Form Field Scanner</h1>
   <button id="scanButton">Scan Form Fields</button>
+  <button id="sendButton" class="secondary">Send to Backend</button>
   <div id="status" class="status"></div>
   <div id="results"></div>
 

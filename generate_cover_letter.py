@@ -92,7 +92,10 @@ def call_with_retry(api_call_func, max_retries=3, wait_seconds=90):
                 f"Rate limit hit at {datetime.now().strftime('%H:%M:%S')}. (attempt {attempt + 1}/{max_retries})"
             )
 
-            # Print rate limit headers if available
+            # Calculate exact wait time from rate limit headers
+            actual_wait_seconds = wait_seconds
+            reset_time_str = None
+
             if hasattr(e, "response") and hasattr(e.response, "headers"):
                 headers = e.response.headers
                 print("Rate limit headers:")
@@ -100,9 +103,33 @@ def call_with_retry(api_call_func, max_retries=3, wait_seconds=90):
                     if "ratelimit" in key.lower() or "rate-limit" in key.lower():
                         print(f"  {key}: {value}")
 
+                # Try to parse the reset timestamp
+                reset_header = headers.get("anthropic-ratelimit-input-tokens-reset")
+                if reset_header:
+                    try:
+                        # Parse ISO datetime format
+                        reset_time = datetime.fromisoformat(reset_header.replace("Z", "+00:00"))
+                        now = datetime.now(reset_time.tzinfo)
+
+                        # Calculate seconds until reset (add 1 second buffer)
+                        seconds_until_reset = (reset_time - now).total_seconds() + 1
+
+                        if seconds_until_reset > 0:
+                            actual_wait_seconds = int(seconds_until_reset)
+                            reset_time_str = reset_time.strftime('%H:%M:%S')
+                        else:
+                            # Reset time is in the past, use default
+                            print(f"Warning: Reset time is in the past, using default wait time")
+                    except Exception as parse_error:
+                        print(f"Warning: Could not parse reset time: {parse_error}")
+                        # Fall back to default wait_seconds
+
             if attempt < max_retries - 1:
-                print(f"Waiting {wait_seconds}s...")
-                time.sleep(wait_seconds)
+                if reset_time_str:
+                    print(f"Rate limit hit. Waiting {actual_wait_seconds}s until {reset_time_str}...")
+                else:
+                    print(f"Waiting {actual_wait_seconds}s...")
+                time.sleep(actual_wait_seconds)
                 print(f"Resuming at {datetime.now().strftime('%H:%M:%S')}")
             else:
                 print(f"Rate limit still hit after {max_retries} attempts. Giving up.")

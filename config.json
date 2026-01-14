@@ -1,34 +1,35 @@
 {
-    "model_definitions": {
-        "haiku": {
-            "provider": "anthropic",
-            "model_id": "claude-haiku-4-5-20250514",
-            "description": "Fast, cheap"
-        },
-        "sonnet": {
-            "provider": "anthropic",
-            "model_id": "claude-sonnet-4-20250514",
-            "description": "Balanced"
-        },
-        "opus": {
-            "provider": "anthropic",
-            "model_id": "claude-opus-4-20250514",
-            "description": "Best quality"
-        }
+  "model_definitions": {
+    "haiku": {
+      "provider": "anthropic",
+      "model_id": "claude-haiku-4-5-20251001",
+      "description": "Fast, cheap"
     },
-    "task_models": {
-        "address_lookup": "haiku",
-        "company_research": "sonnet",
-        "why_paragraph": "sonnet",
-        "style_rewrite": "haiku"
+    "sonnet": {
+      "provider": "anthropic",
+      "model_id": "claude-sonnet-4-20250514",
+      "description": "Balanced"
     },
-    "api_settings": {
-        "retry_attempts": 3,
-        "retry_wait_seconds": 90
-    },
-    "output": {
-        "root_directory": "./user-data/applications",
-        "filename_prefix": "Rami_Ibrahimi"
-    },
-    "user_data_directory": "./user-data"
+    "opus": {
+      "provider": "anthropic",
+      "model_id": "claude-opus-4-20250514",
+      "description": "Best quality"
+    }
+  },
+  "task_models": {
+    "address_lookup": "haiku",
+    "company_research": "sonnet",
+    "why_paragraph": "sonnet",
+    "style_rewrite": "haiku",
+    "field_matching": "haiku"
+  },
+  "api_settings": {
+    "retry_attempts": 3,
+    "retry_wait_seconds": 90
+  },
+  "output": {
+    "root_directory": "./user-data/applications",
+    "filename_prefix": "Rami_Ibrahimi"
+  },
+  "user_data_directory": "./user-data"
 }

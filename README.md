@@ -247,6 +247,61 @@ A Chrome extension for scanning form fields on job application pages is availabl
 
 See [browser-extension/README.md](browser-extension/README.md) for detailed usage.
 
+## Flask Server
+
+A Flask server (`server.py`) provides an API for the browser extension to match form fields with user profile data using LLM-powered field matching.
+
+**Features:**
+- Loads user profile from `user-data/profile.json`
+- Uses Claude Haiku to intelligently match form fields to profile data
+- Returns mapping of field IDs to profile paths or special values:
+  - Profile paths: `"personal.first_name"`, `"personal.email"`, etc.
+  - `"RESUME_UPLOAD"` for resume/CV file upload fields
+  - `"COVER_LETTER"` for motivation/why company fields
+  - `"SKIP"` for demographic/EEO fields that need manual review
+  - `null` for fields requiring human input
+
+**Endpoints:**
+- `POST /api/match-fields` - Accept form field data and return field mapping
+- `GET /api/health` - Health check endpoint
+
+**Setup:**
+```bash
+# Install Flask dependencies (if not already installed)
+pip install -r requirements.txt
+
+# Ensure ANTHROPIC_API_KEY is set
+export ANTHROPIC_API_KEY='your-key-here'
+
+# Start the server
+python server.py
+```
+
+The server runs on `http://localhost:5000` with CORS enabled for browser extension access.
+
+**API Usage:**
+```bash
+# Example request
+curl -X POST http://localhost:5000/api/match-fields \
+  -H "Content-Type: application/json" \
+  -d '{"fields": [{"label": "First Name", "type": "text", "id": "fname"}], "actions": []}'
+
+# Example response
+{
+  "fields": [...],
+  "actions": [...],
+  "field_mapping": {
+    "fname": "personal.first_name"
+  },
+  "status": "success",
+  "message": "Matched 1 fields using LLM"
+}
+```
+
+**Configuration:**
+
+Field matching uses the `field_matching` task model from `config.json` (defaults to Haiku). The matching logic is defined in `prompts/field_matching_prompt.md`.
+
 ## Roadmap
 
 ### Phase 2: Application Tracker (Planned)

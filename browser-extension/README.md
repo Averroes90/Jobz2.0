@@ -4,6 +4,7 @@ A Chrome extension that scans and extracts form field information from job appli
 
 ## Features
 
+### Form Fields
 - Scans all visible form fields (input, select, textarea)
 - Extracts field metadata:
   - Label text (from label, aria-label, or placeholder)
@@ -13,8 +14,30 @@ A Chrome extension that scans and extracts form field information from job appli
   - Current value
   - Placeholder text
   - Autocomplete attribute
+
+### Actions
+- Scans interactive elements:
+  - `<button>` elements
+  - `<input type="submit">` and `<input type="button">`
+  - Elements with `role="button"` attribute
+  - Links (`<a>`) containing keywords: "apply", "upload", "submit", "linkedin"
+- Extracts action metadata:
+  - Type (button, input-button, role-button, link)
+  - Text content
+  - ID and class attributes
+  - Button type attribute
+  - href (for links)
+
+### Backend Communication
+- Send scanned data to Flask backend server
+- POST to `http://localhost:5000/api/match-fields`
+- Receive matched/filled field values from server
+- Display backend response in popup
+
+### Output
 - Simple popup UI with JSON output
-- No server communication (local only)
+- Separate arrays for fields and actions
+- Optional backend integration for field matching
 
 ## Installation
 
@@ -28,10 +51,28 @@ A Chrome extension that scans and extracts form field information from job appli
 
 ## Usage
 
+### Basic Usage (Local Only)
+
 1. Navigate to any web page with a form (e.g., a job application page)
 2. Click the extension icon in your toolbar
 3. Click the "Scan Form Fields" button in the popup
 4. View the extracted form field data in JSON format
+
+### With Backend Server
+
+1. **Start the backend server:**
+   ```bash
+   python server.py
+   ```
+
+2. **Scan and send:**
+   - Navigate to a job application page
+   - Click the extension icon
+   - Click "Scan Form Fields"
+   - Click "Send to Backend" to send data to server
+   - View the server response in the popup
+
+**Note:** If the server is not running, you'll see an error message: "Backend server not running. Start server with: python server.py"
 
 ## Development
 
@@ -46,8 +87,48 @@ A Chrome extension that scans and extracts form field information from job appli
 
 1. User clicks "Scan Form Fields" button
 2. `popup.js` injects `content.js` into the active tab
-3. `content.js` scans the page for form fields and extracts metadata
-4. Results are returned to `popup.js` and displayed as JSON
+3. `content.js` scans the page for form fields and action elements
+4. Results are returned as an object with `fields` and `actions` arrays
+5. `popup.js` displays the results as formatted JSON
+
+### Data Structure
+
+The extension returns an object with two arrays:
+
+```json
+{
+  "fields": [
+    {
+      "label": "Email Address",
+      "type": "email",
+      "name": "email",
+      "id": "email-input",
+      "required": true,
+      "value": "",
+      "placeholder": "you@example.com",
+      "autocomplete": "email"
+    }
+  ],
+  "actions": [
+    {
+      "type": "button",
+      "text": "Submit Application",
+      "buttonType": "submit",
+      "id": "submit-btn",
+      "class": "btn btn-primary",
+      "href": ""
+    },
+    {
+      "type": "link",
+      "text": "Upload Resume",
+      "buttonType": "",
+      "id": "",
+      "class": "upload-link",
+      "href": "https://example.com/upload"
+    }
+  ]
+}
+```
 
 ### Permissions
 
@@ -56,7 +137,8 @@ A Chrome extension that scans and extracts form field information from job appli
 
 ## Next Steps
 
-- Add server communication to send form data to backend
+- ✅ ~~Add server communication to send form data to backend~~
+- Implement field matching logic in backend server
 - Implement form auto-fill functionality
 - Add field mapping/configuration UI
 - Store form templates for reuse

@@ -123,6 +123,32 @@
   }
 
   /**
+   * Check if element is visible
+   */
+  function isVisible(element) {
+    const style = window.getComputedStyle(element);
+    return style.display !== 'none' && style.visibility !== 'hidden';
+  }
+
+  /**
+   * Get text content for button/link
+   */
+  function getElementText(element) {
+    // Get direct text content, trimmed
+    let text = element.textContent.trim();
+
+    // For buttons with no text, try aria-label or value
+    if (!text && element.getAttribute('aria-label')) {
+      text = element.getAttribute('aria-label').trim();
+    }
+    if (!text && element.value) {
+      text = element.value.trim();
+    }
+
+    return text || '[No text]';
+  }
+
+  /**
    * Find all form fields on the page
    */
   function scanFormFields() {
@@ -141,8 +167,7 @@
       }
 
       // Skip if element is not visible
-      const style = window.getComputedStyle(element);
-      if (style.display === 'none' || style.visibility === 'hidden') {
+      if (!isVisible(element)) {
         return;
       }
 
@@ -157,10 +182,116 @@
     return formFields;
   }
 
+  /**
+   * Find all action elements (buttons, submit inputs, links)
+   */
+  function scanActions() {
+    const actions = [];
+
+    // 1. Find all <button> elements
+    const buttons = document.querySelectorAll('button');
+    buttons.forEach((button) => {
+      if (!isVisible(button)) return;
+
+      try {
+        actions.push({
+          type: 'button',
+          text: getElementText(button),
+          buttonType: button.type || 'button',
+          id: button.id || '',
+          class: button.className || '',
+          href: ''
+        });
+      } catch (error) {
+        console.error('Error extracting button info:', error, button);
+      }
+    });
+
+    // 2. Find <input type="submit"> and <input type="button">
+    const inputButtons = document.querySelectorAll('input[type="submit"], input[type="button"]');
+    inputButtons.forEach((input) => {
+      if (!isVisible(input)) return;
+
+      try {
+        actions.push({
+          type: 'input-button',
+          text: input.value || getElementText(input),
+          buttonType: input.type,
+          id: input.id || '',
+          class: input.className || '',
+          href: ''
+        });
+      } catch (error) {
+        console.error('Error extracting input button info:', error, input);
+      }
+    });
+
+    // 3. Find elements with role="button"
+    const roleButtons = document.querySelectorAll('[role="button"]');
+    roleButtons.forEach((element) => {
+      if (!isVisible(element)) return;
+      // Skip if already captured as a <button> element
+      if (element.tagName === 'BUTTON') return;
+
+      try {
+        actions.push({
+          type: 'role-button',
+          text: getElementText(element),
+          buttonType: '',
+          id: element.id || '',
+          class: element.className || '',
+          href: ''
+        });
+      } catch (error) {
+        console.error('Error extracting role button info:', error, element);
+      }
+    });
+
+    // 4. Find links with keywords: "apply", "upload", "submit", "linkedin"
+    const links = document.querySelectorAll('a');
+    const keywords = ['apply', 'upload', 'submit', 'linkedin'];
+
+    links.forEach((link) => {
+      if (!isVisible(link)) return;
+
+      const text = getElementText(link).toLowerCase();
+      const href = (link.href || '').toLowerCase();
+
+      // Check if text or href contains any of the keywords
+      const hasKeyword = keywords.some(keyword =>
+        text.includes(keyword) || href.includes(keyword)
+      );
+
+      if (hasKeyword) {
+        try {
+          actions.push({
+            type: 'link',
+            text: getElementText(link),
+            buttonType: '',
+            id: link.id || '',
+            class: link.className || '',
+            href: link.href || ''
+          });
+        } catch (error) {
+          console.error('Error extracting link info:', error, link);
+        }
+      }
+    });
+
+    return actions;
+  }
+
   // Execute the scan and return results
-  const results = scanFormFields();
-  console.log(`Found ${results.length} form fields:`, results);
+  const fields = scanFormFields();
+  const actions = scanActions();
+
+  console.log(`Found ${fields.length} form fields and ${actions.length} actions`);
+  console.log('Fields:', fields);
+  console.log('Actions:', actions);
 
   // Return the results (this will be received by popup.js)
-  return results;
+  return {
+    fields: fields,
+    actions: actions
+  };
 })();

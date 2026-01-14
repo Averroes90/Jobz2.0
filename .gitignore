@@ -7,6 +7,7 @@ input/
 output/
 venv/
 prompts/
+!prompts/README.md
 template/
 debug*.*
 debug_*
