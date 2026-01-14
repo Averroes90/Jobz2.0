@@ -470,6 +470,145 @@ def create_cover_letter(
     return output_path
 
 
+def run_pipeline(
+    company_name: str,
+    role_title: str,
+    job_description: str = "",
+    role_location: str = "",
+    custom_prompt: str = "",
+    model_override: str | None = None,
+    delay: int = 5,
+    skip_research: bool = False,
+    manual_address1: str = "",
+    manual_address2: str = "",
+    output_dir: Path | None = None,
+    dry_run: bool = False,
+) -> dict:
+    """
+    Run the cover letter generation pipeline.
+
+    Args:
+        company_name: Company name
+        role_title: Job title/role
+        job_description: Job description text (optional)
+        role_location: Role location (e.g., "San Francisco", "Remote")
+        custom_prompt: Custom instructions for the 'why' paragraph
+        model_override: Model name to use for all tasks (overrides config defaults)
+        delay: Delay in seconds between API calls (default: 5)
+        skip_research: Skip web research and use manual address
+        manual_address1: Manual address line 1 (used with skip_research)
+        manual_address2: Manual address line 2 (used with skip_research)
+        output_dir: Output directory root (defaults to config value)
+        dry_run: Preview without creating files
+
+    Returns:
+        dict: {
+            "paragraph": str,           # Final generated paragraph
+            "docx_path": str,           # Path to timestamped docx
+            "latest_docx_path": str,    # Path to latest version docx
+            "address": dict,            # {"address_line1": str, "address_line2": str}
+            "company_context": str      # Research context (empty if skip_research)
+        }
+    """
+    # Load configuration
+    config, get_model_id = load_config()
+
+    # Use output directory from config if not provided
+    if output_dir is None:
+        output_dir = Path(config["output"]["root_directory"])
+
+    # Get company address and context (or use manual values)
+    if skip_research:
+        address = {
+            "address_line1": manual_address1 or f"{company_name} Hiring Team",
+            "address_line2": manual_address2 or "",
+        }
+        company_context = ""
+        print(f"Skipping research, using provided/default address")
+    else:
+        # Get company address
+        print(f"Looking up address for {company_name}...")
+        address_model_id = get_model_id("address_lookup", model_override)
+        address = get_company_address(
+            company_name, role_location, address_model_id, config
+        )
+        print(f"Found address: {address['address_line1']}, {address['address_line2']}")
+
+        # Get company context
+        print(f"Researching {company_name}...")
+        research_model_id = get_model_id("company_research", model_override)
+        context_result = get_company_context(
+            company_name, role_title, job_description, research_model_id, config
+        )
+        company_context = context_result["company_context"]
+
+        # Debug: write company context to file
+        Path("debug_context.txt").write_text(company_context, encoding="utf-8")
+        print(f"Debug: Company context saved to debug_context.txt")
+
+    # Generate why paragraph
+    print(f"Generating 'why {company_name}' paragraph...")
+    paragraph_model_id = get_model_id("why_paragraph", model_override)
+    why_paragraph = generate_why_paragraph(
+        company_name,
+        role_title,
+        company_context,
+        job_description,
+        custom_prompt,
+        paragraph_model_id,
+        config,
+    )
+
+    print(f"\nGenerated paragraph:\n{why_paragraph}\n")
+
+    # Rewrite for style
+    time.sleep(delay)
+    print(f"Rewriting for style...")
+    style_model_id = get_model_id("style_rewrite", model_override)
+    final_paragraph = rewrite_for_style(why_paragraph, style_model_id, config)
+    print(f"\nFinal paragraph:\n{final_paragraph}\n")
+
+    # Build output path: applications/CompanyName/FilenamePrefix_CompanyName_2026-01-05_RoleTitle.docx
+    filename_prefix = config["output"]["filename_prefix"]
+    safe_company_name = re.sub(r"[^\w\s-]", "", company_name).replace(" ", "_")
+    safe_role = re.sub(r"[^\w\s-]", "", role_title).replace(" ", "_")
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    filename = f"{filename_prefix}_{safe_company_name}_{date_str}_{safe_role}.docx"
+    output_path = output_dir / safe_company_name / filename
+
+    # Create cover letter
+    print(f"Creating cover letter at {output_path}...")
+    create_cover_letter(
+        company_name=company_name,
+        role_title=role_title,
+        address_line1=address["address_line1"],
+        address_line2=address["address_line2"],
+        why_paragraph=final_paragraph,
+        output_path=output_path,
+        dry_run=dry_run,
+    )
+
+    # Create latest version
+    latest_path = None
+    if not dry_run:
+        print(f"\n✓ Cover letter created: {output_path}")
+
+        # Also create/overwrite the latest active version for this company
+        latest_filename = f"{filename_prefix}_Cover_letter_{safe_company_name}.docx"
+        latest_path = output_dir / safe_company_name / latest_filename
+        shutil.copy2(output_path, latest_path)
+        print(f"✓ Latest version updated: {latest_path}")
+
+    # Return results
+    return {
+        "paragraph": final_paragraph,
+        "docx_path": str(output_path),
+        "latest_docx_path": str(latest_path) if latest_path else None,
+        "address": address,
+        "company_context": company_context,
+    }
+
+
 def main():
     # Load configurations
     config, get_model_id = load_config()
@@ -539,7 +678,7 @@ def main():
         print("Using task-specific models from config")
 
     # Load custom prompt from file if specified
-    custom_prompt = args.custom_prompt
+    custom_prompt = args.custom_prompt or ""
     if args.custom_prompt_file and args.custom_prompt_file.exists():
         custom_prompt = args.custom_prompt_file.read_text()
 
@@ -548,84 +687,21 @@ def main():
     if args.job_desc_file and args.job_desc_file.exists():
         job_description = args.job_desc_file.read_text()
 
-    # Get company address and context (or use manual values)
-    if args.skip_research:
-        address = {
-            "address_line1": args.address1 or f"{args.company} Hiring Team",
-            "address_line2": args.address2 or "",
-        }
-        company_context = ""
-        print(f"Skipping research, using provided/default address")
-    else:
-        # Get company address
-        print(f"Looking up address for {args.company}...")
-        role_location = args.role_location or ""
-        address_model_id = get_model_id("address_lookup", args.model)
-        address = get_company_address(
-            args.company, role_location, address_model_id, config
-        )
-        print(f"Found address: {address['address_line1']}, {address['address_line2']}")
-
-        # Get company context
-        print(f"Researching {args.company}...")
-        research_model_id = get_model_id("company_research", args.model)
-        context_result = get_company_context(
-            args.company, args.role, job_description, research_model_id, config
-        )
-        company_context = context_result["company_context"]
-
-        # Debug: write company context to file
-        Path("debug_context.txt").write_text(company_context, encoding="utf-8")
-        print(f"Debug: Company context saved to debug_context.txt")
-
-    print(f"Generating 'why {args.company}' paragraph...")
-    paragraph_model_id = get_model_id("why_paragraph", args.model)
-    why_paragraph = generate_why_paragraph(
-        args.company,
-        args.role,
-        company_context,
-        job_description,
-        custom_prompt,
-        paragraph_model_id,
-        config,
-    )
-
-    print(f"\nGenerated paragraph:\n{why_paragraph}\n")
-
-    # Rewrite for style
-    time.sleep(args.delay)
-    print(f"Rewriting for style...")
-    style_model_id = get_model_id("style_rewrite", args.model)
-    final_paragraph = rewrite_for_style(why_paragraph, style_model_id, config)
-    print(f"\nFinal paragraph:\n{final_paragraph}\n")
-
-    # Build output path: applications/CompanyName/FilenamePrefix_CompanyName_2026-01-05_RoleTitle.docx
-    filename_prefix = config["output"]["filename_prefix"]
-    safe_company_name = re.sub(r"[^\w\s-]", "", args.company).replace(" ", "_")
-    safe_role = re.sub(r"[^\w\s-]", "", args.role).replace(" ", "_")
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    filename = f"{filename_prefix}_{safe_company_name}_{date_str}_{safe_role}.docx"
-    output_path = args.output_dir / safe_company_name / filename
-
-    print(f"Creating cover letter at {output_path}...")
-    create_cover_letter(
+    # Run the pipeline
+    run_pipeline(
         company_name=args.company,
         role_title=args.role,
-        address_line1=address["address_line1"],
-        address_line2=address["address_line2"],
-        why_paragraph=final_paragraph,
-        output_path=output_path,
+        job_description=job_description,
+        role_location=args.role_location or "",
+        custom_prompt=custom_prompt,
+        model_override=args.model,
+        delay=args.delay,
+        skip_research=args.skip_research,
+        manual_address1=args.address1 or "",
+        manual_address2=args.address2 or "",
+        output_dir=args.output_dir,
         dry_run=args.dry_run,
     )
-
-    if not args.dry_run:
-        print(f"\n✓ Cover letter created: {output_path}")
-
-        # Also create/overwrite the latest active version for this company
-        latest_filename = f"{filename_prefix}_Cover_letter_{safe_company_name}.docx"
-        latest_path = args.output_dir / safe_company_name / latest_filename
-        shutil.copy2(output_path, latest_path)
-        print(f"✓ Latest version updated: {latest_path}")
 
 
 if __name__ == "__main__":

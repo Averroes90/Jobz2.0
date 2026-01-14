@@ -7,8 +7,8 @@ It shows which Python files use which prompt templates.
 
 ## Summary
 
-- **Total prompts**: 6
-- **Prompts in use**: 6
+- **Total prompts**: 8
+- **Prompts in use**: 8
 - **Unused prompts**: 0
 
 
@@ -30,13 +30,26 @@ It shows which Python files use which prompt templates.
 
 **Used in 1 location(s):**
 
-- `server.py:72`
+- `server.py:220`
 
-### `my_background.md`
+### `freeform_answer_prompt.md`
 
 **Used in 1 location(s):**
 
+- `server.py:116`
+
+### `my_background.md`
+
+**Used in 2 location(s):**
+
 - `generate_cover_letter.py:298`
+- `server.py:115`
+
+### `specific_question_prompt.md`
+
+**Used in 1 location(s):**
+
+- `server.py:167`
 
 ### `style_rewrite_prompt.md`
 

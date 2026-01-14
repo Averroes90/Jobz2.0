@@ -277,24 +277,54 @@ export ANTHROPIC_API_KEY='your-key-here'
 python server.py
 ```
 
-The server runs on `http://localhost:5000` with CORS enabled for browser extension access.
+The server runs on `http://localhost:5050` with CORS enabled for browser extension access.
 
 **API Usage:**
 ```bash
 # Example request
-curl -X POST http://localhost:5000/api/match-fields \
+curl -X POST http://localhost:5050/api/match-fields \
   -H "Content-Type: application/json" \
-  -d '{"fields": [{"label": "First Name", "type": "text", "id": "fname"}], "actions": []}'
+  -d '{
+    "fields": [
+      {"label": "First Name", "type": "text", "id": "fname"},
+      {"label": "Email", "type": "email", "id": "email"},
+      {"label": "Resume", "type": "file", "id": "resume"},
+      {"label": "Why do you want to work here?", "type": "textarea", "id": "cover_letter"}
+    ],
+    "actions": [],
+    "jobDetails": {
+      "company_name": "Anthropic",
+      "role_title": "Product Manager",
+      "job_description": "..."
+    }
+  }'
 
 # Example response
+# Response fields:
+# - status: "complete" when processing finished
+# - field_mappings: LLM's mapping decisions (profile paths or special actions)
+# - fill_values: Combined auto-filled values (profile data + AI-generated content)
+# - files: File paths for resume and generated documents
+# - needs_human: Field IDs that need manual input
+
 {
-  "fields": [...],
-  "actions": [...],
-  "field_mapping": {
-    "fname": "personal.first_name"
+  "status": "complete",
+  "field_mappings": {
+    "fname": "personal.first_name",
+    "email": "personal.email",
+    "resume": "RESUME_UPLOAD",
+    "cover_letter": "COVER_LETTER"
   },
-  "status": "success",
-  "message": "Matched 1 fields using LLM"
+  "fill_values": {
+    "fname": "John",
+    "email": "john@example.com",
+    "cover_letter": "I want to work at Anthropic because..."
+  },
+  "files": {
+    "resume": "/path/to/resume.pdf",
+    "cover_letter": "/path/to/cover_letter.docx"
+  },
+  "needs_human": []
 }
 ```
 

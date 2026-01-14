@@ -30,7 +30,7 @@ A Chrome extension that scans and extracts form field information from job appli
 
 ### Backend Communication
 - Send scanned data to Flask backend server
-- POST to `http://localhost:5000/api/match-fields`
+- POST to `http://localhost:5050/api/match-fields`
 - Receive matched/filled field values from server
 - Display backend response in popup
 

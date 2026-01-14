@@ -41,6 +41,8 @@ graph TD
 | `why_company_prompt.md` | Generate "why I want to work here" paragraph | `company_name`, `role_title`, `company_context`, `my_background`, `job_description` | Cover letter paragraph (plain text) | sonnet |
 | `style_rewrite_prompt.md` | Rewrite paragraph for style and clarity | `paragraph` | Rewritten paragraph (max 4 sentences, simplified) | haiku |
 | `field_matching_prompt.md` | Match form fields to user profile data | `profile` (JSON), `form_fields` (JSON) | JSON mapping: field ID → profile path or special value | haiku |
+| `freeform_answer_prompt.md` | Answer open-ended job application questions | `question`, `my_background`, `company_context` | 2-4 sentence answer (plain text) | haiku |
+| `specific_question_prompt.md` | Answer specific questions from profile data | `question`, `profile` (JSON) | Brief answer or "NEEDS_HUMAN" | haiku |
 | `my_background.md` | User's professional background (static context) | N/A (user-edited content) | Used as context input for `why_company_prompt.md` | N/A |
 
 ### Special Values for Field Matching
@@ -66,12 +68,14 @@ Models are assigned to prompts in `config.json` under `task_models`:
     "company_research": "sonnet",
     "why_paragraph": "sonnet",
     "style_rewrite": "haiku",
-    "field_matching": "haiku"
+    "field_matching": "haiku",
+    "freeform_answer": "haiku",
+    "specific_question": "haiku"
   }
 }
 ```
 
-- **Haiku**: Fast, cheap model for simple tasks (address lookup, style rewrite, field matching)
+- **Haiku**: Fast, cheap model for simple tasks (address lookup, style rewrite, field matching, freeform answers, specific questions)
 - **Sonnet**: Balanced model for complex reasoning (company research, paragraph generation)
 - **Opus**: Best quality (currently unused, available for future use)
 

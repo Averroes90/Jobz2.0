@@ -21,7 +21,9 @@
     "company_research": "sonnet",
     "why_paragraph": "sonnet",
     "style_rewrite": "haiku",
-    "field_matching": "haiku"
+    "field_matching": "haiku",
+    "freeform_answer": "haiku",
+    "specific_question": "haiku"
   },
   "api_settings": {
     "retry_attempts": 3,
