@@ -6,7 +6,7 @@ config/credentials.json
 input/
 output/
 venv/
-prompts/
+prompts/*
 !prompts/README.md
 template/
 debug*.*
