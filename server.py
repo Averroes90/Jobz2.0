@@ -12,9 +12,13 @@ from dotenv import load_dotenv
 import anthropic
 from anthropic.types import TextBlock
 from generate_cover_letter import run_pipeline
+from utils import TokenTracker, track_api_call
 
 # Load environment variables
 load_dotenv()
+
+# Global token tracker
+tracker = TokenTracker()
 
 app = Flask(__name__)
 
@@ -140,6 +144,9 @@ def generate_freeform_answer(question: str, company_context: str = "", config: d
         messages=[{"role": "user", "content": prompt}]
     )
 
+    # Track API usage
+    track_api_call(tracker, "freeform_answer", model_id, response)
+
     # Extract text from response
     full_text = ""
     for block in response.content:
@@ -189,6 +196,9 @@ def answer_specific_question(question: str, profile: dict, config: dict | None =
         max_tokens=200,
         messages=[{"role": "user", "content": prompt}]
     )
+
+    # Track API usage
+    track_api_call(tracker, "specific_question", model_id, response)
 
     # Extract text from response
     full_text = ""
@@ -240,6 +250,9 @@ def match_fields_with_llm(form_fields: list, profile: dict, config: dict) -> dic
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}]
     )
+
+    # Track API usage
+    track_api_call(tracker, "field_matching", model_id, response)
 
     # Extract text from response
     full_text = ""
@@ -572,6 +585,11 @@ def match_fields():
 
         print(f"Processing complete: {len(fill_values)} auto-filled, {len(needs_human)} need human, {len(files)} files")
 
+        # Print token usage summary
+        tracker.print_summary()
+        total = tracker.get_session_total()
+        print(f"Session total: {total['total_tokens']:,} tokens, ${total['total_cost']:.4f}")
+
         return jsonify({
             'status': 'complete',
             'field_mappings': field_mapping,
@@ -605,6 +623,18 @@ def health():
     }), 200
 
 
+@app.route('/api/token-usage', methods=['GET'])
+def token_usage():
+    """Get token usage summary for current session."""
+    summary = tracker.get_summary()
+    session_total = tracker.get_session_total()
+
+    return jsonify({
+        'session_total': session_total,
+        'by_task': list(summary.values())
+    }), 200
+
+
 @app.route('/api/test', methods=['GET', 'POST', 'OPTIONS'])
 def test():
     """Simple test endpoint to verify CORS is working."""
@@ -616,7 +646,20 @@ def test():
     }), 200
 
 
+def shutdown_handler():
+    """Export token usage log on server shutdown."""
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = f"logs/server_token_usage_{timestamp}.json"
+    tracker.export_log(log_path)
+    print(f"\nServer shutting down. Token usage log saved to {log_path}")
+    tracker.print_summary()
+
+
 if __name__ == '__main__':
+    import atexit
+    atexit.register(shutdown_handler)
+
     print("Starting Flask server on http://localhost:5050")
     print("CORS enabled for browser extension access")
     print("Listening on all interfaces (0.0.0.0:5050)")

@@ -25,9 +25,13 @@ from urllib import response
 import anthropic
 from anthropic.types import TextBlock
 from dotenv import load_dotenv
+from utils import TokenTracker, track_api_call
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Global token tracker
+tracker = TokenTracker()
 
 # Configuration paths
 TEMPLATE_PATH = Path(__file__).parent / "template" / "cover_letter_template.docx"
@@ -190,6 +194,9 @@ def get_company_address(
         wait_seconds=config["api_settings"]["retry_wait_seconds"],
     )
 
+    # Track API usage
+    track_api_call(tracker, "address_lookup", model, response)
+
     # Extract text from response
     full_text = ""
     for block in response.content:
@@ -260,6 +267,9 @@ def get_company_context(
         max_retries=config["api_settings"]["retry_attempts"],
         wait_seconds=config["api_settings"]["retry_wait_seconds"],
     )
+
+    # Track API usage
+    track_api_call(tracker, "company_research", model, response)
 
     # Extract text from response
     full_text = ""
@@ -340,6 +350,9 @@ prompt length: {len(prompt)} chars
         wait_seconds=config["api_settings"]["retry_wait_seconds"],
     )
 
+    # Track API usage
+    track_api_call(tracker, "why_paragraph", model, response)
+
     block = response.content[0]
     if isinstance(block, TextBlock):
         return block.text.strip()
@@ -379,6 +392,9 @@ def rewrite_for_style(
         max_retries=config["api_settings"]["retry_attempts"],
         wait_seconds=config["api_settings"]["retry_wait_seconds"],
     )
+
+    # Track API usage
+    track_api_call(tracker, "style_rewrite", model, response)
 
     block = response.content[0]
     if isinstance(block, TextBlock):
@@ -598,6 +614,11 @@ def run_pipeline(
         latest_path = output_dir / safe_company_name / latest_filename
         shutil.copy2(output_path, latest_path)
         print(f"✓ Latest version updated: {latest_path}")
+
+    # Export token usage log and print summary
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tracker.export_log(f"logs/token_usage_{timestamp}.json")
+    tracker.print_summary()
 
     # Return results
     return {

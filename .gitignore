@@ -13,3 +13,4 @@ template/
 debug*.*
 debug_*
 user-data/
+logs/*.jsonl

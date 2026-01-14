@@ -112,86 +112,102 @@
    */
   function getFieldHint(element) {
     const hints = [];
+    const elementId = element.id || element.name || 'unknown';
+
+    // Helper function to add hint if not already present
+    function addHint(text) {
+      if (text && text.trim() && !hints.includes(text.trim())) {
+        hints.push(text.trim());
+      }
+    }
 
     // 1. Check aria-describedby attribute (points to helper text element ID)
     const describedBy = element.getAttribute('aria-describedby');
     if (describedBy) {
       const hintElement = document.getElementById(describedBy);
-      if (hintElement && hintElement.textContent.trim()) {
-        hints.push(hintElement.textContent.trim());
+      if (hintElement) {
+        addHint(hintElement.innerText || hintElement.textContent);
+        console.log('Field:', elementId, 'Found hint via aria-describedby:', hintElement.innerText || hintElement.textContent);
       }
     }
 
-    // 2. Find the field's container (form group, field wrapper, etc.)
-    const container = element.closest('[class*="field" i], [class*="form-group" i], [class*="input-group" i], div');
-    if (container) {
-      // Look for hint/help elements within the container
-      const hintSelectors = [
-        '[class*="hint" i]',
-        '[class*="help" i]',
-        '[class*="description" i]',
-        '[class*="subscript" i]',
-        '[class*="subtitle" i]',
-        '[class*="helper" i]',
-        'small',
-        '.help-text',
-        '.field-hint'
-      ];
+    // 2. Check element.nextElementSibling
+    const nextSibling = element.nextElementSibling;
+    if (nextSibling) {
+      const text = nextSibling.innerText || nextSibling.textContent;
+      if (text && text.trim().length > 0 && text.trim().length < 500) {
+        // Reasonable length for hint
+        addHint(text);
+        console.log('Field:', elementId, 'Found hint in nextElementSibling:', text);
+      }
+    }
 
-      hintSelectors.forEach(selector => {
-        const hintElements = container.querySelectorAll(selector);
+    // 3. Check parent element's nextElementSibling
+    const parent = element.parentElement;
+    if (parent && parent.nextElementSibling) {
+      const text = parent.nextElementSibling.innerText || parent.nextElementSibling.textContent;
+      if (text && text.trim().length > 0 && text.trim().length < 500) {
+        addHint(text);
+        console.log('Field:', elementId, 'Found hint in parent nextElementSibling:', text);
+      }
+    }
+
+    // 4. Check for elements with id containing the input's id + "hint", "help", "desc"
+    if (element.id) {
+      const hintSuffixes = ['hint', 'help', 'desc', 'description', 'helper', 'note'];
+      hintSuffixes.forEach(suffix => {
+        const hintId = `${element.id}-${suffix}`;
+        const hintElement = document.getElementById(hintId);
+        if (hintElement) {
+          addHint(hintElement.innerText || hintElement.textContent);
+          console.log('Field:', elementId, 'Found hint via id pattern:', hintElement.innerText || hintElement.textContent);
+        }
+
+        // Also try without hyphen
+        const hintIdNoDash = `${element.id}${suffix}`;
+        const hintElementNoDash = document.getElementById(hintIdNoDash);
+        if (hintElementNoDash) {
+          addHint(hintElementNoDash.innerText || hintElementNoDash.textContent);
+          console.log('Field:', elementId, 'Found hint via id pattern (no dash):', hintElementNoDash.innerText || hintElementNoDash.textContent);
+        }
+      });
+    }
+
+    // 5. Search within the input's closest div, fieldset, or label parent
+    const container = element.closest('div, fieldset, label');
+    if (container) {
+      // Look for <small> tags
+      const smallTags = container.querySelectorAll('small');
+      smallTags.forEach(small => {
+        if (!small.contains(element) && small !== element) {
+          const text = small.innerText || small.textContent;
+          if (text && text.trim().length > 0) {
+            addHint(text);
+            console.log('Field:', elementId, 'Found hint in <small> tag:', text);
+          }
+        }
+      });
+
+      // Look for elements with hint-related classes
+      const hintKeywords = ['hint', 'help', 'description', 'helper', 'subscript', 'caption', 'note', 'sub'];
+      hintKeywords.forEach(keyword => {
+        const hintElements = container.querySelectorAll(`[class*="${keyword}" i]`);
         hintElements.forEach(hintEl => {
-          // Only include if it's not the field itself and not the label
-          if (hintEl !== element && !hintEl.contains(element)) {
-            const text = hintEl.textContent.trim();
-            if (text && !hints.includes(text)) {
-              hints.push(text);
+          if (!hintEl.contains(element) && hintEl !== element) {
+            const text = hintEl.innerText || hintEl.textContent;
+            if (text && text.trim().length > 0 && text.trim().length < 500) {
+              addHint(text);
+              console.log('Field:', elementId, `Found hint in .${keyword} class:`, text);
             }
           }
         });
       });
     }
 
-    // 3. Check for elements immediately following the field
-    let nextSibling = element.nextElementSibling;
-    if (nextSibling) {
-      // Check if it's a hint element
-      const isHintElement =
-        nextSibling.tagName === 'SMALL' ||
-        nextSibling.classList.toString().toLowerCase().match(/hint|help|description|subscript|subtitle/) ||
-        (nextSibling.tagName === 'SPAN' && nextSibling.classList.toString().toLowerCase().includes('help')) ||
-        nextSibling.tagName === 'P';
-
-      if (isHintElement) {
-        const text = nextSibling.textContent.trim();
-        if (text && !hints.includes(text)) {
-          hints.push(text);
-        }
-      }
-    }
-
-    // 4. Check for elements immediately following the label
-    const label = document.querySelector(`label[for="${element.id}"]`);
-    if (label) {
-      nextSibling = label.nextElementSibling;
-      if (nextSibling && nextSibling !== element) {
-        const isHintElement =
-          nextSibling.tagName === 'SMALL' ||
-          nextSibling.classList.toString().toLowerCase().match(/hint|help|description|subscript|subtitle/) ||
-          (nextSibling.tagName === 'SPAN' && nextSibling.classList.toString().toLowerCase().includes('help')) ||
-          nextSibling.tagName === 'P';
-
-        if (isHintElement) {
-          const text = nextSibling.textContent.trim();
-          if (text && !hints.includes(text)) {
-            hints.push(text);
-          }
-        }
-      }
-    }
-
     // Return combined hints or empty string
-    return hints.length > 0 ? hints.join(' | ') : '';
+    const hintText = hints.length > 0 ? hints.join(' | ') : '';
+    console.log('Field:', elementId, 'Final hint:', hintText);
+    return hintText;
   }
 
   /**
