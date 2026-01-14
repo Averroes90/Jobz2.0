@@ -212,4 +212,19 @@ Check these files in the project root after running.
 - Pipeline flows are modified
 - Model assignments change
 
-**Last updated**: 2026-01-13
+**Tracking prompt usage:**
+
+To see which Python files use which prompts, run:
+```bash
+python scripts/prompt_usage.py
+```
+
+This generates `prompts/USAGE.md` with a complete usage map showing:
+- Which prompts are currently in use
+- Exact file locations and line numbers
+- Unused prompts (if any)
+- Orphaned references (prompts referenced but don't exist)
+
+The usage report is automatically regenerated each time you run the script.
+
+**Last updated**: 2026-01-14
