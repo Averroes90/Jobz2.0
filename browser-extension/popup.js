@@ -475,8 +475,11 @@ fillButton.addEventListener('click', async () => {
 
     // Execute the fill function directly
     const fillValues = backendResponse.fill_values || {};
+    const files = backendResponse.files || {};
+    const fieldMappings = backendResponse.field_mappings || {};
 
     console.log('Filling form with values:', fillValues);
+    console.log('Files to upload:', files);
 
     // Execute fillFormFields function directly by injecting it
     const fillResults = await chrome.scripting.executeScript({
@@ -619,13 +622,105 @@ fillButton.addEventListener('click', async () => {
 
     const result = fillResults[0]?.result;
 
+    // Handle file uploads
+    let filesUploaded = 0;
+    let filesErrors = 0;
+
+    if (Object.keys(files).length > 0) {
+      statusDiv.textContent = 'Uploading files...';
+
+      // Find fields that need files
+      const fileFields = {};
+      for (const [fieldId, mapping] of Object.entries(fieldMappings)) {
+        if (mapping === 'RESUME_UPLOAD' && files.resume) {
+          fileFields[fieldId] = { type: 'resume', path: files.resume };
+        } else if (mapping && mapping.startsWith('COVER_LETTER_') && files.cover_letter) {
+          // Don't upload cover letter as file if it's already being used as text
+          // (cover letter upload fields would have RESUME_UPLOAD or similar mapping, not COVER_LETTER_*)
+        }
+      }
+
+      console.log('File fields to fill:', fileFields);
+
+      // Upload files to each field
+      for (const [fieldId, fileInfo] of Object.entries(fileFields)) {
+        try {
+          // Fetch file from server
+          const fileUrl = `http://localhost:5050/api/get-file?path=${encodeURIComponent(fileInfo.path)}`;
+          const response = await fetch(fileUrl);
+
+          if (!response.ok) {
+            throw new Error(`Failed to fetch file: ${response.statusText}`);
+          }
+
+          const blob = await response.blob();
+          const filename = fileInfo.path.split('/').pop();
+          const file = new File([blob], filename, { type: blob.type });
+
+          console.log(`Attaching ${fileInfo.type} to field ${fieldId}:`, filename);
+
+          // Inject file into the page
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: (fieldId, fileData, filename, mimeType) => {
+              // Find the file input
+              let element = document.getElementById(fieldId);
+              if (!element) {
+                element = document.querySelector(`[name="${fieldId}"]`);
+              }
+
+              if (!element || element.type !== 'file') {
+                console.warn(`File input not found: ${fieldId}`);
+                return { success: false, error: 'Field not found' };
+              }
+
+              try {
+                // Create a File object from the data
+                const blob = new Blob([new Uint8Array(fileData)], { type: mimeType });
+                const file = new File([blob], filename, { type: mimeType });
+
+                // Create a DataTransfer to hold the file
+                const dataTransfer = new DataTransfer();
+                dataTransfer.items.add(file);
+
+                // Set the files property
+                element.files = dataTransfer.files;
+
+                // Trigger events
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+
+                console.log(`File attached to ${fieldId}:`, filename);
+                return { success: true, filename };
+              } catch (error) {
+                console.error(`Error attaching file to ${fieldId}:`, error);
+                return { success: false, error: error.message };
+              }
+            },
+            args: [fieldId, Array.from(new Uint8Array(await blob.arrayBuffer())), filename, blob.type]
+          });
+
+          filesUploaded++;
+        } catch (error) {
+          console.error(`Error uploading file to ${fieldId}:`, error);
+          filesErrors++;
+        }
+      }
+    }
+
     if (result) {
       const filledCount = result.filled?.length || 0;
       const notFoundCount = result.notFound?.length || 0;
       const errorCount = result.errors?.length || 0;
 
-      if (filledCount > 0) {
-        statusDiv.textContent = `Filled ${filledCount} field${filledCount !== 1 ? 's' : ''}${notFoundCount > 0 ? `, ${notFoundCount} not found` : ''}${errorCount > 0 ? `, ${errorCount} error${errorCount !== 1 ? 's' : ''}` : ''}`;
+      let statusParts = [];
+      if (filledCount > 0) statusParts.push(`${filledCount} field${filledCount !== 1 ? 's' : ''} filled`);
+      if (filesUploaded > 0) statusParts.push(`${filesUploaded} file${filesUploaded !== 1 ? 's' : ''} uploaded`);
+      if (notFoundCount > 0) statusParts.push(`${notFoundCount} not found`);
+      if (errorCount > 0 || filesErrors > 0) statusParts.push(`${errorCount + filesErrors} error${(errorCount + filesErrors) !== 1 ? 's' : ''}`);
+
+      if (statusParts.length > 0) {
+        statusDiv.textContent = statusParts.join(', ');
         statusDiv.className = 'status success';
       } else {
         statusDiv.textContent = 'No fields were filled. Check console for details.';

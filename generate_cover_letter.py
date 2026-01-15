@@ -19,14 +19,12 @@ import subprocess
 import sys
 import tempfile
 import time
-import zipfile
 from datetime import datetime
 from pathlib import Path
 from urllib import response
 import anthropic
 from anthropic.types import TextBlock
 from dotenv import load_dotenv
-from lxml import etree
 from utils import TokenTracker, track_api_call
 from utils.cache import ResearchCache
 
@@ -116,7 +114,9 @@ def call_with_retry(api_call_func, max_retries=3, wait_seconds=90):
                 if reset_header:
                     try:
                         # Parse ISO datetime format
-                        reset_time = datetime.fromisoformat(reset_header.replace("Z", "+00:00"))
+                        reset_time = datetime.fromisoformat(
+                            reset_header.replace("Z", "+00:00")
+                        )
                         now = datetime.now(reset_time.tzinfo)
 
                         # Calculate seconds until reset (add 1 second buffer)
@@ -124,17 +124,21 @@ def call_with_retry(api_call_func, max_retries=3, wait_seconds=90):
 
                         if seconds_until_reset > 0:
                             actual_wait_seconds = int(seconds_until_reset)
-                            reset_time_str = reset_time.strftime('%H:%M:%S')
+                            reset_time_str = reset_time.strftime("%H:%M:%S")
                         else:
                             # Reset time is in the past, use default
-                            print(f"Warning: Reset time is in the past, using default wait time")
+                            print(
+                                f"Warning: Reset time is in the past, using default wait time"
+                            )
                     except Exception as parse_error:
                         print(f"Warning: Could not parse reset time: {parse_error}")
                         # Fall back to default wait_seconds
 
             if attempt < max_retries - 1:
                 if reset_time_str:
-                    print(f"Rate limit hit. Waiting {actual_wait_seconds}s until {reset_time_str}...")
+                    print(
+                        f"Rate limit hit. Waiting {actual_wait_seconds}s until {reset_time_str}..."
+                    )
                 else:
                     print(f"Waiting {actual_wait_seconds}s...")
                 time.sleep(actual_wait_seconds)
@@ -610,7 +614,7 @@ def extract_cover_letter_text(docx_path: str) -> str:
             ["pandoc", str(docx_file), "-t", "plain", "-o", "-"],
             capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
 
         full_text = result.stdout.strip()
@@ -626,7 +630,9 @@ def extract_cover_letter_text(docx_path: str) -> str:
             return full_text
 
     except subprocess.CalledProcessError as e:
-        raise Exception(f"Failed to extract text from {docx_path} using pandoc: {e.stderr}")
+        raise Exception(
+            f"Failed to extract text from {docx_path} using pandoc: {e.stderr}"
+        )
     except Exception as e:
         raise Exception(f"Failed to extract text from {docx_path}: {e}")
 

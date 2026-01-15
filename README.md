@@ -198,8 +198,12 @@ All configuration is centralized in `config.json`:
   "task_models": {
     "address_lookup": "haiku",
     "company_research": "sonnet",
+    "company_research_search": "haiku",
+    "company_research_synthesize": "sonnet",
     "why_paragraph": "sonnet",
-    "style_rewrite": "haiku"
+    "style_rewrite": "haiku",
+    "form_analysis": "haiku",
+    "application_content": "haiku"
   },
   "api_settings": {
     "retry_attempts": 3,
@@ -249,20 +253,57 @@ See [browser-extension/README.md](browser-extension/README.md) for detailed usag
 
 ## Flask Server
 
-A Flask server (`server.py`) provides an API for the browser extension to match form fields with user profile data using LLM-powered field matching.
+A Flask server (`server.py`) provides an API for the browser extension to intelligently fill job application forms using LLM-powered field analysis.
 
 **Features:**
-- Loads user profile from `user-data/profile.json`
-- Uses Claude Haiku to intelligently match form fields to profile data
-- Returns mapping of field IDs to profile paths or special values:
-  - Profile paths: `"personal.first_name"`, `"personal.email"`, etc.
-  - `"RESUME_UPLOAD"` for resume/CV file upload fields
-  - `"COVER_LETTER"` for motivation/why company fields
-  - `"SKIP"` for demographic/EEO fields that need manual review
-  - `null` for fields requiring human input
+- **Smart Form Analysis**: Two-phase processing (form mapping → content generation)
+- **Profile-Based Auto-Fill**: Loads user profile from `user-data/profile.json`
+- **Custom Answers**: Company/role-specific answers in `custom_answers` section
+- **Automatic File Uploads**: Serves resume and cover letter files for upload
+- **Boolean Conversion**: Intelligently converts boolean values to match dropdown options (Yes/No, true/false, etc.)
+- **Custom Dropdown Detection**: Handles non-standard dropdowns (Greenhouse, Lever, etc.)
+- **Universal Company Detection**: Extracts company name from URL, meta tags, JSON-LD, and page structure
+
+**Profile Structure** (`user-data/profile.json`):
+```json
+{
+  "personal": {
+    "first_name": "John",
+    "last_name": "Doe",
+    "email": "john@example.com",
+    "phone": "555-1234",
+    "country": "United States",
+    "linkedin": "https://linkedin.com/in/johndoe"
+  },
+  "work_authorization": {
+    "requires_sponsorship": false,
+    "will_require_sponsorship": false
+  },
+  "preferences": {
+    "open_to_relocation": true,
+    "open_to_hybrid": true,
+    "earliest_start": "Immediately"
+  },
+  "custom_answers": {
+    "Have you ever interviewed at Anthropic before": "No",
+    "Have you worked at Google": "Yes"
+  }
+}
+```
+
+**Field Mapping Actions:**
+- Profile paths: `"personal.first_name"`, `"personal.email"`, `"custom_answers.Have you interviewed here before"`
+- `"RESUME_UPLOAD"` - Resume/CV file upload fields
+- `"COVER_LETTER_FULL"` - Full cover letter with header
+- `"COVER_LETTER_BODY"` - Cover letter body without header
+- `"COVER_LETTER_WHY"` - Just the "why company" paragraph
+- `"GENERATE_ANSWER"` - Open-ended questions needing AI generation
+- `"ACKNOWLEDGE_TRUE"` - Acknowledgment/consent checkboxes
+- `"NEEDS_HUMAN"` - Fields requiring manual input
 
 **Endpoints:**
-- `POST /api/match-fields` - Accept form field data and return field mapping
+- `POST /api/match-fields` - Process form fields and return matched values
+- `GET /api/get-file?path=...` - Serve files for upload (resume, cover letter)
 - `GET /api/health` - Health check endpoint
 
 **Setup:**
@@ -273,64 +314,63 @@ pip install -r requirements.txt
 # Ensure ANTHROPIC_API_KEY is set
 export ANTHROPIC_API_KEY='your-key-here'
 
+# Create user profile
+mkdir -p user-data/resume
+cp your_resume.pdf user-data/resume/
+# Edit user-data/profile.json with your info
+
 # Start the server
 python server.py
 ```
 
 The server runs on `http://localhost:5050` with CORS enabled for browser extension access.
 
-**API Usage:**
-```bash
-# Example request
-curl -X POST http://localhost:5050/api/match-fields \
-  -H "Content-Type: application/json" \
-  -d '{
-    "fields": [
-      {"label": "First Name", "type": "text", "id": "fname"},
-      {"label": "Email", "type": "email", "id": "email"},
-      {"label": "Resume", "type": "file", "id": "resume"},
-      {"label": "Why do you want to work here?", "type": "textarea", "id": "cover_letter"}
-    ],
-    "actions": [],
-    "jobDetails": {
-      "company_name": "Anthropic",
-      "role_title": "Product Manager",
-      "job_description": "..."
-    }
-  }'
-
-# Example response
-# Response fields:
-# - status: "complete" when processing finished
-# - field_mappings: LLM's mapping decisions (profile paths or special actions)
-# - fill_values: Combined auto-filled values (profile data + AI-generated content)
-# - files: File paths for resume and generated documents
-# - needs_human: Field IDs that need manual input
-
+**API Response:**
+```json
 {
   "status": "complete",
   "field_mappings": {
-    "fname": "personal.first_name",
+    "first_name": "personal.first_name",
     "email": "personal.email",
+    "open_to_hybrid": "preferences.open_to_hybrid",
     "resume": "RESUME_UPLOAD",
-    "cover_letter": "COVER_LETTER"
+    "why_company": "COVER_LETTER_WHY"
   },
   "fill_values": {
-    "fname": "John",
+    "first_name": "John",
     "email": "john@example.com",
-    "cover_letter": "I want to work at Anthropic because..."
+    "open_to_hybrid": "Yes",
+    "why_company": "I want to work at Anthropic because..."
   },
   "files": {
-    "resume": "/path/to/resume.pdf",
-    "cover_letter": "/path/to/cover_letter.docx"
+    "resume": "/path/to/user-data/resume/resume.pdf",
+    "cover_letter": "/path/to/user-data/applications/Company/cover_letter.docx"
   },
-  "needs_human": []
+  "needs_human": ["linkedin_url"]
 }
 ```
 
 **Configuration:**
 
-Field matching uses the `field_matching` task model from `config.json` (defaults to Haiku). The matching logic is defined in `prompts/field_matching_prompt.md`.
+Form processing uses task-specific models from `config.json`:
+- `form_analysis` - Maps fields to profile/actions (Haiku)
+- `application_content` - Generates text for open-ended questions (Haiku)
+
+See `prompts/README.md` for prompt details.
+
+**Cost Optimization:**
+
+The system is optimized for cost efficiency:
+- **Form filling**: ~$0.015 per application (2 API calls with Haiku)
+- **Cover letter generation**: Additional cost if needed
+- **Token optimization**: Streamlined field data, limited dropdown options to 10
+- **Smart caching**: Reuses cover letter content across multiple fields
+
+**Performance Tips:**
+- Use Haiku for form analysis (fast and cheap)
+- Only generate cover letters when needed
+- Leverage profile data for instant fills
+- Add custom_answers for frequently asked questions
 
 ## Roadmap
 

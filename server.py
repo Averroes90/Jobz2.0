@@ -6,7 +6,7 @@ Receives form field data from browser extension and returns matched/filled value
 
 import json
 from pathlib import Path
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from dotenv import load_dotenv
 import anthropic
@@ -624,6 +624,35 @@ def resolve_profile_values(field_mapping: dict, profile: dict, fields: list = No
 
     print(f"Resolved {len(resolved_values)} field values from profile")
     return resolved_values
+
+
+@app.route('/api/get-file', methods=['GET', 'OPTIONS'])
+def get_file():
+    """Serve a file for upload (used by extension to fetch resume/cover letter)."""
+    if request.method == 'OPTIONS':
+        return '', 200
+
+    file_path = request.args.get('path')
+    if not file_path:
+        return jsonify({'error': 'No file path provided'}), 400
+
+    # Security: Only allow files from user-data directory
+    config = load_config()
+    user_data_dir = config.get('user_data_directory', './user-data')
+    user_data_path = Path(user_data_dir).expanduser().resolve()
+
+    requested_path = Path(file_path).resolve()
+
+    # Check if requested file is within user-data directory
+    try:
+        requested_path.relative_to(user_data_path)
+    except ValueError:
+        return jsonify({'error': 'Access denied: file outside user data directory'}), 403
+
+    if not requested_path.exists():
+        return jsonify({'error': 'File not found'}), 404
+
+    return send_file(requested_path, as_attachment=True)
 
 
 @app.route('/api/match-fields', methods=['OPTIONS'])
