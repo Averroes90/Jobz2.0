@@ -73,18 +73,135 @@
       display: block;
     }
 
-    #results {
+    .status {
+      margin-top: 8px;
+      font-size: 13px;
+      color: #666;
+    }
+
+    .error {
+      color: #d32f2f;
+    }
+
+    .success {
+      color: #388e3c;
+    }
+
+    /* Collapsible sections */
+    .collapsible-section {
       margin-top: 16px;
-      max-height: 400px;
-      overflow-y: auto;
-      font-size: 12px;
+      border: 1px solid #e0e0e0;
+      border-radius: 4px;
+      background: #fff;
       display: none;
     }
 
-    #results.show {
+    .collapsible-section.show {
       display: block;
     }
 
+    .collapsible-header {
+      padding: 12px;
+      background: #f9f9f9;
+      cursor: pointer;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      color: #333;
+      border-radius: 4px 4px 0 0;
+    }
+
+    .collapsible-header:hover {
+      background: #f0f0f0;
+    }
+
+    .collapsible-icon {
+      font-size: 12px;
+      transition: transform 0.2s;
+    }
+
+    .collapsible-section.collapsed .collapsible-icon {
+      transform: rotate(-90deg);
+    }
+
+    .collapsible-content {
+      padding: 12px;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+
+    .collapsible-section.collapsed .collapsible-content {
+      display: none;
+    }
+
+    /* Scanned fields section */
+    .fields-summary {
+      font-size: 12px;
+      color: #666;
+      margin-top: 8px;
+    }
+
+    .field-item {
+      padding: 8px;
+      margin-bottom: 6px;
+      background: #f9f9f9;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+
+    .field-label {
+      font-weight: 600;
+      color: #333;
+    }
+
+    .field-meta {
+      font-size: 11px;
+      color: #999;
+      margin-top: 2px;
+    }
+
+    /* Job details section */
+    .form-group {
+      margin-bottom: 12px;
+    }
+
+    .form-group:last-child {
+      margin-bottom: 0;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: #666;
+      margin-bottom: 4px;
+    }
+
+    .form-group input {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 13px;
+      font-family: system-ui, -apple-system, sans-serif;
+      box-sizing: border-box;
+    }
+
+    .form-group input:focus {
+      outline: none;
+      border-color: #4285f4;
+    }
+
+    .hint {
+      font-size: 11px;
+      color: #999;
+      margin-top: 4px;
+    }
+
+    /* Results section */
     .response-sections {
       display: flex;
       flex-direction: column;
@@ -127,102 +244,6 @@
       color: #999;
       font-style: italic;
     }
-
-    .status {
-      margin-top: 8px;
-      font-size: 13px;
-      color: #666;
-    }
-
-    .error {
-      color: #d32f2f;
-    }
-
-    .success {
-      color: #388e3c;
-    }
-
-    #jobDetailsSection {
-      margin-top: 16px;
-      padding: 12px;
-      background: #f9f9f9;
-      border-radius: 4px;
-      border: 1px solid #e0e0e0;
-      display: none;
-    }
-
-    #jobDetailsSection.show {
-      display: block;
-    }
-
-    #jobDetailsSection h2 {
-      font-size: 14px;
-      margin: 0 0 12px 0;
-      color: #555;
-    }
-
-    .form-group {
-      margin-bottom: 12px;
-    }
-
-    .form-group label {
-      display: block;
-      font-size: 12px;
-      font-weight: 500;
-      color: #666;
-      margin-bottom: 4px;
-    }
-
-    .form-group input {
-      width: 100%;
-      padding: 8px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      font-size: 13px;
-      font-family: system-ui, -apple-system, sans-serif;
-      box-sizing: border-box;
-    }
-
-    .form-group input:focus {
-      outline: none;
-      border-color: #4285f4;
-    }
-
-    .hint {
-      font-size: 11px;
-      color: #999;
-      margin-top: 4px;
-    }
-
-    #previewSection {
-      margin-top: 16px;
-      padding: 12px;
-      background: #f0f7ff;
-      border-radius: 4px;
-      border: 1px solid #c5e0ff;
-      display: none;
-    }
-
-    #previewSection.show {
-      display: block;
-    }
-
-    #previewSection h3 {
-      font-size: 13px;
-      margin: 0 0 8px 0;
-      color: #333;
-    }
-
-    #previewSection .preview-item {
-      font-size: 12px;
-      margin-bottom: 6px;
-      color: #555;
-    }
-
-    #previewSection .preview-label {
-      font-weight: 500;
-      color: #333;
-    }
   </style>
 </head>
 <body>
@@ -232,42 +253,52 @@
     <button id="clearButton" style="width: auto; background: #999;">Clear</button>
   </div>
 
-  <!-- Job Details Section -->
-  <div id="jobDetailsSection">
-    <h2>Job Details</h2>
-    <div class="form-group">
-      <label for="companyInput">Company Name</label>
-      <input type="text" id="companyInput" placeholder="e.g., Anthropic">
-      <div class="hint">Extracted from page (edit if incorrect)</div>
+  <div id="status" class="status"></div>
+
+  <!-- Scanned Fields Section -->
+  <div id="scannedFieldsSection" class="collapsible-section">
+    <div class="collapsible-header" data-section="scannedFields">
+      <span class="collapsible-icon">▼</span>
+      <span>📋 Scanned Fields</span>
     </div>
-    <div class="form-group">
-      <label for="roleInput">Role Title</label>
-      <input type="text" id="roleInput" placeholder="e.g., Product Manager">
-      <div class="hint">Extracted from page (edit if incorrect)</div>
+    <div class="collapsible-content">
+      <div id="fieldsContent"></div>
     </div>
   </div>
 
-  <!-- Preview Section -->
-  <div id="previewSection">
-    <h3>Preview</h3>
-    <div class="preview-item">
-      <span class="preview-label">Company:</span> <span id="previewCompany">-</span>
+  <!-- Job Details Section -->
+  <div id="jobDetailsSection" class="collapsible-section">
+    <div class="collapsible-header" data-section="jobDetails">
+      <span class="collapsible-icon">▼</span>
+      <span>🔍 Job Details</span>
     </div>
-    <div class="preview-item">
-      <span class="preview-label">Role:</span> <span id="previewRole">-</span>
+    <div class="collapsible-content">
+      <div class="form-group">
+        <label for="companyInput">Company Name</label>
+        <input type="text" id="companyInput" placeholder="e.g., Anthropic">
+        <div class="hint">Extracted from page (edit if incorrect)</div>
+      </div>
+      <div class="form-group">
+        <label for="roleInput">Role Title</label>
+        <input type="text" id="roleInput" placeholder="e.g., Product Manager">
+        <div class="hint">Extracted from page (edit if incorrect)</div>
+      </div>
     </div>
-    <div class="preview-item">
-      <span class="preview-label">Fields:</span> <span id="previewFields">0</span>
+  </div>
+
+  <!-- Results Section -->
+  <div id="resultsSection" class="collapsible-section">
+    <div class="collapsible-header" data-section="results">
+      <span class="collapsible-icon">▼</span>
+      <span>✅ Results</span>
     </div>
-    <div class="preview-item">
-      <span class="preview-label">Actions:</span> <span id="previewActions">0</span>
+    <div class="collapsible-content">
+      <div id="resultsContent"></div>
     </div>
   </div>
 
   <button id="sendButton" class="secondary">Send to Backend</button>
   <button id="fillButton" class="fill">Fill Form</button>
-  <div id="status" class="status"></div>
-  <div id="results"></div>
 
   <script src="popup.js"></script>
 </body>

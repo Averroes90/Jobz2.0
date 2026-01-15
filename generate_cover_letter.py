@@ -19,19 +19,23 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from urllib import response
 import anthropic
 from anthropic.types import TextBlock
 from dotenv import load_dotenv
+from lxml import etree
 from utils import TokenTracker, track_api_call
+from utils.cache import ResearchCache
 
 # Load environment variables from .env file
 load_dotenv()
 
-# Global token tracker
+# Global token tracker and research cache
 tracker = TokenTracker()
+research_cache = ResearchCache()
 
 # Configuration paths
 TEMPLATE_PATH = Path(__file__).parent / "template" / "cover_letter_template.docx"
@@ -223,6 +227,110 @@ def get_company_address(
     return result
 
 
+def search_company_info(
+    company_name: str,
+    role_title: str,
+    model: str | None = None,
+    config: dict | None = None,
+) -> str:
+    """
+    Phase 1: Use Haiku with web search to gather raw facts about the company.
+    Returns raw facts as a string.
+    """
+    if config is None:
+        config, get_model_id_fn = load_config()
+        if model is None:
+            model = get_model_id_fn("company_research_search")
+    elif model is None:
+        # config is provided but model is not, need to get model_id
+        _, get_model_id_fn = load_config()
+        model = get_model_id_fn("company_research_search")
+
+    client = anthropic.Anthropic()
+
+    # Load and format the search prompt
+    search_prompt = load_prompt("company_research_search_prompt.md").format(
+        company_name=company_name,
+        role_title=role_title,
+    )
+
+    response = call_with_retry(
+        lambda: client.messages.create(
+            model=model,
+            max_tokens=2000,
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            messages=[{"role": "user", "content": search_prompt}],
+        ),
+        max_retries=config["api_settings"]["retry_attempts"],
+        wait_seconds=config["api_settings"]["retry_wait_seconds"],
+    )
+
+    # Track API usage
+    track_api_call(tracker, "company_research_search", model, response)
+
+    # Extract text from response
+    raw_facts = ""
+    for block in response.content:
+        if isinstance(block, TextBlock):
+            raw_facts += block.text
+
+    return raw_facts
+
+
+def synthesize_company_context(
+    company_name: str,
+    role_title: str,
+    raw_facts: str,
+    job_description: str = "",
+    model: str | None = None,
+    config: dict | None = None,
+) -> dict:
+    """
+    Phase 2: Use Sonnet to synthesize raw facts into structured context.
+    No web search - just processing text.
+    Returns structured context dict.
+    """
+    if config is None:
+        config, get_model_id_fn = load_config()
+        if model is None:
+            model = get_model_id_fn("company_research_synthesize")
+    elif model is None:
+        # config is provided but model is not, need to get model_id
+        _, get_model_id_fn = load_config()
+        model = get_model_id_fn("company_research_synthesize")
+
+    client = anthropic.Anthropic()
+
+    # Load and format the synthesize prompt
+    synthesize_prompt = load_prompt("company_research_synthesize_prompt.md").format(
+        company_name=company_name,
+        role_title=role_title,
+        raw_facts=raw_facts,
+        job_description=job_description or "Not provided",
+    )
+
+    response = call_with_retry(
+        lambda: client.messages.create(
+            model=model,
+            max_tokens=1000,
+            messages=[{"role": "user", "content": synthesize_prompt}],
+        ),
+        max_retries=config["api_settings"]["retry_attempts"],
+        wait_seconds=config["api_settings"]["retry_wait_seconds"],
+    )
+
+    # Track API usage
+    track_api_call(tracker, "company_research_synthesize", model, response)
+
+    # Extract text from response
+    context_text = ""
+    for block in response.content:
+        if isinstance(block, TextBlock):
+            context_text += block.text
+
+    return {"company_context": context_text}
+
+
 def get_company_context(
     company_name: str,
     role_title: str,
@@ -231,53 +339,42 @@ def get_company_context(
     config: dict | None = None,
 ) -> dict:
     """
-    Use Claude API with web search to research the company.
+    Two-phase company research with caching:
+    1. Check cache first (7-day expiry)
+    2. If not cached: Search for raw facts using Haiku + web search (cheap)
+    3. If not cached: Synthesize facts into context using Sonnet (focused)
+    4. Cache the result for future use
+
     Returns company context for generating the "why" paragraph.
     """
-    if config is None:
-        config, get_model_id_fn = load_config()
-        if model is None:
-            model = get_model_id_fn("company_research")
-    elif model is None:
-        # config is provided but model is not, need to get model_id
-        _, get_model_id_fn = load_config()
-        model = get_model_id_fn("company_research")
+    # Check cache first
+    cached = research_cache.get(company_name)
+    if cached:
+        print(f"✓ Using cached research for {company_name}")
+        return cached
 
-    client = anthropic.Anthropic()
+    print(f"Researching {company_name}...")
 
-    # Format job description section
-    job_desc_section = ""
-    if job_description:
-        job_desc_section = f"\nJob Description:\n{job_description}"
-
-    # Load and format the company research prompt
-    research_prompt = load_prompt("company_research_prompt.md").format(
+    # Phase 1: Search for raw facts
+    raw_facts = search_company_info(
         company_name=company_name,
         role_title=role_title,
-        job_description=job_desc_section,
+        config=config,
     )
 
-    response = call_with_retry(
-        lambda: client.messages.create(
-            model=model,
-            max_tokens=2000,
-            tools=[{"type": "web_search_20250305", "name": "web_search"}],
-            messages=[{"role": "user", "content": research_prompt}],
-        ),
-        max_retries=config["api_settings"]["retry_attempts"],
-        wait_seconds=config["api_settings"]["retry_wait_seconds"],
+    # Phase 2: Synthesize into structured context
+    result = synthesize_company_context(
+        company_name=company_name,
+        role_title=role_title,
+        raw_facts=raw_facts,
+        job_description=job_description,
+        config=config,
     )
 
-    # Track API usage
-    track_api_call(tracker, "company_research", model, response)
+    # Cache for future use
+    research_cache.set(company_name, result)
 
-    # Extract text from response
-    full_text = ""
-    for block in response.content:
-        if isinstance(block, TextBlock):
-            full_text += block.text
-
-    return {"company_context": full_text}
+    return result
 
 
 def generate_why_paragraph(
@@ -456,6 +553,10 @@ def create_cover_letter(
         for placeholder, value in replacements.items():
             content = content.replace(placeholder, value)
 
+        # Note: We keep the ---BODY--- marker in the document so that
+        # extract_cover_letter_text() can use it to identify where the body starts.
+        # The marker is removed from the extracted text, not the DOCX file.
+
         if dry_run:
             print("\n--- DRY RUN: Would create document with these values ---")
             for key, value in replacements.items():
@@ -484,6 +585,50 @@ def create_cover_letter(
         )
 
     return output_path
+
+
+def extract_cover_letter_text(docx_path: str) -> str:
+    """Extract plain text from a .docx file using pandoc.
+
+    If the ---BODY--- marker exists in the text, returns only the content
+    after the marker. Otherwise returns the full text.
+
+    Args:
+        docx_path: Path to the .docx file
+
+    Returns:
+        Text content of the document (body only if marker exists)
+    """
+    docx_file = Path(docx_path)
+
+    if not docx_file.exists():
+        raise FileNotFoundError(f"DOCX file not found: {docx_path}")
+
+    try:
+        # Use pandoc to extract plain text
+        result = subprocess.run(
+            ["pandoc", str(docx_file), "-t", "plain", "-o", "-"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+        full_text = result.stdout.strip()
+
+        # If marker exists, return only content after it
+        if "---BODY---" in full_text:
+            # Split on marker and get everything after it
+            parts = full_text.split("---BODY---", 1)
+            body_text = parts[1].lstrip()  # Strip leading whitespace
+            return body_text
+        else:
+            # No marker, return full text
+            return full_text
+
+    except subprocess.CalledProcessError as e:
+        raise Exception(f"Failed to extract text from {docx_path} using pandoc: {e.stderr}")
+    except Exception as e:
+        raise Exception(f"Failed to extract text from {docx_path}: {e}")
 
 
 def run_pipeline(
@@ -617,12 +762,21 @@ def run_pipeline(
 
     # Export token usage log and print summary
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tracker.export_log(f"logs/token_usage_{timestamp}.json")
+    tracker.export_log(f"logs/token_usage_{timestamp}.log")
     tracker.print_summary()
+
+    # Extract body text from the generated cover letter
+    try:
+        body_text = extract_cover_letter_text(str(output_path))
+        print(f"✓ Extracted {len(body_text)} characters of body text")
+    except Exception as e:
+        print(f"Warning: Could not extract body text: {e}")
+        body_text = final_paragraph  # Fallback to just the paragraph
 
     # Return results
     return {
         "paragraph": final_paragraph,
+        "body_text": body_text,
         "docx_path": str(output_path),
         "latest_docx_path": str(latest_path) if latest_path else None,
         "address": address,

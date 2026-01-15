@@ -30,6 +30,16 @@ Match form fields to user profile data and auto-fill where possible.
 }
 ```
 
+**Field Mapping Types:**
+- **Profile paths**: Dot notation like `"personal.first_name"` - resolved to profile values
+- **RESUME_UPLOAD**: File upload field - path returned in `files.resume`
+- **COVER_LETTER**: Motivation/cover letter - generated text in `fill_values`
+- **FREEFORM_ANSWER**: Open-ended question - generated text in `fill_values`
+- **SPECIFIC_QUESTION**: Answerable from profile - answer in `fill_values` or `needs_human`
+- **ACKNOWLEDGE_TRUE**: Agreement/consent checkbox - set to `true` in `fill_values`
+- **SKIP**: Demographic/EEO fields - added to `needs_human`
+- **UNKNOWN**: Cannot determine mapping - added to `needs_human`
+
 ### GET /api/token-usage
 
 Get token usage statistics for the current server session.

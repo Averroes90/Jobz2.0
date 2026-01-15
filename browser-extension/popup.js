@@ -4,15 +4,17 @@ const sendButton = document.getElementById('sendButton');
 const fillButton = document.getElementById('fillButton');
 const clearButton = document.getElementById('clearButton');
 const statusDiv = document.getElementById('status');
-const resultsDiv = document.getElementById('results');
+
+// Collapsible sections
+const scannedFieldsSection = document.getElementById('scannedFieldsSection');
 const jobDetailsSection = document.getElementById('jobDetailsSection');
+const resultsSection = document.getElementById('resultsSection');
+
+// Content areas
+const fieldsContent = document.getElementById('fieldsContent');
+const resultsContent = document.getElementById('resultsContent');
 const companyInput = document.getElementById('companyInput');
 const roleInput = document.getElementById('roleInput');
-const previewSection = document.getElementById('previewSection');
-const previewCompany = document.getElementById('previewCompany');
-const previewRole = document.getElementById('previewRole');
-const previewFields = document.getElementById('previewFields');
-const previewActions = document.getElementById('previewActions');
 
 // Store scanned data and backend response
 let scannedData = null;
@@ -22,18 +24,75 @@ let currentTabId = null;
 // Backend API endpoint
 const BACKEND_URL = 'http://localhost:5050/api/match-fields';
 
-// Update preview when job details change
-function updatePreview() {
-  if (!scannedData) return;
+// Button state management with cooldown
+const buttonStates = new Map(); // Track original text for each button
 
-  const { fields = [], actions = [] } = scannedData;
+function disableButtonWithLoading(button, loadingText = 'Processing...') {
+  if (!buttonStates.has(button)) {
+    buttonStates.set(button, button.textContent);
+  }
+  button.disabled = true;
+  button.textContent = loadingText;
+}
 
-  previewCompany.textContent = companyInput.value || '-';
-  previewRole.textContent = roleInput.value || '-';
-  previewFields.textContent = fields.length;
-  previewActions.textContent = actions.length;
+async function enableButtonWithCooldown(button, cooldownMs = 2000) {
+  // Restore original text
+  const originalText = buttonStates.get(button) || button.textContent;
+  button.textContent = originalText;
 
-  previewSection.classList.add('show');
+  // Wait for cooldown period before re-enabling
+  await new Promise(resolve => setTimeout(resolve, cooldownMs));
+  button.disabled = false;
+}
+
+// Collapsible section toggle
+function setupCollapsibleSections() {
+  document.querySelectorAll('.collapsible-header').forEach(header => {
+    header.addEventListener('click', () => {
+      const section = header.parentElement;
+      section.classList.toggle('collapsed');
+    });
+  });
+}
+
+// Toggle section collapsed state
+function toggleSection(section, collapsed) {
+  if (collapsed) {
+    section.classList.add('collapsed');
+  } else {
+    section.classList.remove('collapsed');
+  }
+}
+
+// Display scanned fields
+function displayScannedFields(data) {
+  const { fields = [], actions = [] } = data;
+
+  let html = `<div class="fields-summary">Found ${fields.length} field${fields.length !== 1 ? 's' : ''} and ${actions.length} action${actions.length !== 1 ? 's' : ''}</div>`;
+
+  if (fields.length > 0) {
+    html += '<div style="margin-top: 12px;">';
+    fields.forEach((field, index) => {
+      const label = field.label || '[No label]';
+      const hint = field.hint || '';
+      const type = field.type || 'unknown';
+      const required = field.required ? ' (required)' : '';
+
+      html += `
+        <div class="field-item">
+          <div class="field-label">${label}${required}</div>
+          ${hint ? `<div class="field-meta">Hint: ${hint}</div>` : ''}
+          <div class="field-meta">Type: ${type} | ID: ${field.id || index}</div>
+        </div>
+      `;
+    });
+    html += '</div>';
+  }
+
+  fieldsContent.innerHTML = html;
+  scannedFieldsSection.classList.add('show');
+  // Ensure section is expanded (not collapsed) when first populated
+  toggleSection(scannedFieldsSection, false);
 }
 
 // Save current state to chrome.storage
@@ -87,18 +146,18 @@ async function loadState(tabId) {
     companyInput.value = state.jobDetails.company_name || jobDetails.company_name || '';
     roleInput.value = state.jobDetails.role_title || jobDetails.role_title || '';
 
-    // Show sections
+    // Display scanned fields (expanded)
+    displayScannedFields(scannedData);
+
+    // Show job details section (expanded)
     jobDetailsSection.classList.add('show');
-    updatePreview();
+    toggleSection(jobDetailsSection, false);
+
     sendButton.classList.add('show');
 
     // Show status
-    statusDiv.textContent = `Loaded: ${fields.length} field${fields.length !== 1 ? 's' : ''}, ${actions.length} action${actions.length !== 1 ? 's' : ''}`;
+    statusDiv.textContent = `Loaded previous scan`;
     statusDiv.className = 'status';
-
-    // Display full results
-    resultsDiv.textContent = JSON.stringify(scannedData, null, 2);
-    resultsDiv.classList.add('show');
   }
 
   // Restore backend response if exists
@@ -109,8 +168,11 @@ async function loadState(tabId) {
     const readyCount = Object.keys(backendResponse.fill_values || {}).length;
     const filesCount = Object.keys(backendResponse.files || {}).length;
     const needsCount = (backendResponse.needs_human || []).length;
-    statusDiv.textContent = `Loaded: ${readyCount} ready to fill, ${filesCount} files, ${needsCount} need input`;
+    statusDiv.textContent = `${readyCount} ready, ${filesCount} files, ${needsCount} need input`;
     statusDiv.className = 'status success';
+
+    // Collapse scanned fields section after backend response
+    toggleSection(scannedFieldsSection, true);
   }
 
   console.log('State restored for tab', tabId);
@@ -129,12 +191,13 @@ async function clearState() {
   backendResponse = null;
   companyInput.value = '';
   roleInput.value = '';
+  scannedFieldsSection.classList.remove('show');
   jobDetailsSection.classList.remove('show');
-  previewSection.classList.remove('show');
+  resultsSection.classList.remove('show');
   sendButton.classList.remove('show');
   fillButton.classList.remove('show');
-  resultsDiv.classList.remove('show');
-  resultsDiv.textContent = '';
+  fieldsContent.innerHTML = '';
+  resultsContent.innerHTML = '';
   statusDiv.textContent = '';
   statusDiv.className = 'status';
 
@@ -203,8 +266,10 @@ function displayStructuredResponse(data) {
 
   html += '</div>';
 
-  resultsDiv.innerHTML = html;
-  resultsDiv.classList.add('show');
+  resultsContent.innerHTML = html;
+  resultsSection.classList.add('show');
+  // Ensure results section is expanded when populated
+  toggleSection(resultsSection, false);
 }
 
 // Handle scan button click
@@ -214,13 +279,15 @@ scanButton.addEventListener('click', async () => {
     scanButton.disabled = true;
     sendButton.classList.remove('show');
     fillButton.classList.remove('show');
-    jobDetailsSection.classList.remove('show');
-    previewSection.classList.remove('show');
     statusDiv.textContent = 'Scanning...';
     statusDiv.className = 'status';
-    resultsDiv.classList.remove('show');
-    resultsDiv.textContent = '';
+
+    // Clear scanned fields content (but keep section visible if already shown)
+    fieldsContent.innerHTML = '';
     scannedData = null;
+
+    // Don't clear job details or results - they stay visible from previous scans
+    // Results section will be cleared only when new backend response arrives
     backendResponse = null;
 
     // Get the active tab
@@ -257,22 +324,19 @@ scanButton.addEventListener('click', async () => {
       // Store scanned data
       scannedData = scanData;
 
-      statusDiv.textContent = `Found ${fields.length} field${fields.length !== 1 ? 's' : ''} and ${actions.length} action${actions.length !== 1 ? 's' : ''}`;
+      statusDiv.textContent = `Scan complete`;
       statusDiv.className = 'status success';
+
+      // Display scanned fields
+      displayScannedFields(scanData);
 
       // Populate job details fields
       companyInput.value = jobDetails.company_name || '';
       roleInput.value = jobDetails.role_title || '';
 
-      // Show job details section
+      // Show job details section (expanded)
       jobDetailsSection.classList.add('show');
-
-      // Update preview
-      updatePreview();
-
-      // Format and display the full results
-      resultsDiv.textContent = JSON.stringify(scanData, null, 2);
-      resultsDiv.classList.add('show');
+      toggleSection(jobDetailsSection, false);
 
       // Show the send button
       sendButton.classList.add('show');
@@ -291,10 +355,6 @@ scanButton.addEventListener('click', async () => {
   }
 });
 
-// Add event listeners to update preview when job details change
-companyInput.addEventListener('input', updatePreview);
-roleInput.addEventListener('input', updatePreview);
-
 // Save state when job details are edited
 companyInput.addEventListener('change', saveState);
 roleInput.addEventListener('change', saveState);
@@ -308,8 +368,8 @@ sendButton.addEventListener('click', async () => {
   }
 
   try {
-    // Disable button during send
-    sendButton.disabled = true;
+    // Disable button with loading indicator
+    disableButtonWithLoading(sendButton, 'Sending...');
     statusDiv.textContent = 'Sending to backend...';
     statusDiv.className = 'status';
 
@@ -368,6 +428,9 @@ sendButton.addEventListener('click', async () => {
     // Display the response in structured sections
     displayStructuredResponse(responseData);
 
+    // Collapse scanned fields section after backend response
+    toggleSection(scannedFieldsSection, true);
+
     // Save state with backend response
     await saveState();
 
@@ -384,8 +447,8 @@ sendButton.addEventListener('click', async () => {
     }
     statusDiv.className = 'status error';
   } finally {
-    // Re-enable button
-    sendButton.disabled = false;
+    // Re-enable button with 2-second cooldown
+    await enableButtonWithCooldown(sendButton, 2000);
   }
 });
 
@@ -398,27 +461,190 @@ fillButton.addEventListener('click', async () => {
   }
 
   try {
-    // Disable button during fill
-    fillButton.disabled = true;
+    // Disable button with loading indicator
+    disableButtonWithLoading(fillButton, 'Filling...');
     statusDiv.textContent = 'Filling form...';
     statusDiv.className = 'status';
 
-    // TODO: Implement actual form filling logic
-    // This will inject a content script that fills the form with backendResponse.fill_values
+    // Get the active tab
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-    console.log('Fill form with:', backendResponse);
+    if (!tab.id) {
+      throw new Error('No active tab found');
+    }
 
-    // Placeholder: Show success message
-    statusDiv.textContent = 'Form filling not yet implemented';
-    statusDiv.className = 'status';
+    // Execute the fill function directly
+    const fillValues = backendResponse.fill_values || {};
+
+    console.log('Filling form with values:', fillValues);
+
+    // Execute fillFormFields function directly by injecting it
+    const fillResults = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: (fillValues) => {
+        // Define helper functions inline
+        function getFieldType(element) {
+          if (element.tagName === 'SELECT') return 'select';
+          if (element.tagName === 'TEXTAREA') return 'textarea';
+          if (element.tagName === 'INPUT') return element.type || 'text';
+          return 'unknown';
+        }
+
+        // Fuzzy match helper function
+        function fuzzyMatchOption(value, optionValue, optionText) {
+          const val = String(value).toLowerCase().trim();
+          const optVal = String(optionValue).toLowerCase().trim();
+          const optTxt = String(optionText).toLowerCase().trim();
+
+          if (val === optVal || val === optTxt) return true;
+
+          const trueValues = ['true', 'yes', '1', 't', 'y'];
+          const falseValues = ['false', 'no', '0', 'f', 'n'];
+
+          if (trueValues.includes(val)) {
+            return trueValues.includes(optVal) || trueValues.includes(optTxt);
+          }
+          if (falseValues.includes(val)) {
+            return falseValues.includes(optVal) || falseValues.includes(optTxt);
+          }
+
+          const countryVariations = {
+            'united states': ['us', 'usa', 'u.s.', 'u.s.a.', 'united states of america'],
+            'united kingdom': ['uk', 'u.k.', 'great britain', 'gb'],
+            'canada': ['ca', 'can']
+          };
+
+          for (const [canonical, variations] of Object.entries(countryVariations)) {
+            if (val === canonical || variations.includes(val)) {
+              if (optVal === canonical || variations.includes(optVal) ||
+                  optTxt === canonical || variations.includes(optTxt)) {
+                return true;
+              }
+            }
+          }
+
+          return false;
+        }
+
+        // Fill the form fields
+        const results = {
+          filled: [],
+          errors: [],
+          notFound: []
+        };
+
+        for (const [fieldIdentifier, value] of Object.entries(fillValues)) {
+          try {
+            let element = document.getElementById(fieldIdentifier);
+            if (!element) {
+              element = document.querySelector(`[name="${fieldIdentifier}"]`);
+            }
+            if (!element && /^\d+$/.test(fieldIdentifier)) {
+              const inputs = document.querySelectorAll('input, select, textarea');
+              element = inputs[parseInt(fieldIdentifier)];
+            }
+
+            if (!element) {
+              console.warn(`Field not found: ${fieldIdentifier}`);
+              results.notFound.push(fieldIdentifier);
+              continue;
+            }
+
+            const fieldType = getFieldType(element);
+
+            if (fieldType === 'checkbox') {
+              const val = String(value).toLowerCase().trim();
+              const trueValues = ['true', 'yes', '1', 't', 'y'];
+              const falseValues = ['false', 'no', '0', 'f', 'n'];
+
+              if (value === true || trueValues.includes(val)) {
+                element.checked = true;
+                element.dispatchEvent(new Event('click', { bubbles: true }));
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+                results.filled.push({ field: fieldIdentifier, type: 'checkbox', value: true });
+              } else if (value === false || falseValues.includes(val)) {
+                element.checked = false;
+                element.dispatchEvent(new Event('click', { bubbles: true }));
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+                results.filled.push({ field: fieldIdentifier, type: 'checkbox', value: false });
+              }
+            } else if (fieldType === 'radio') {
+              const val = String(value).toLowerCase().trim();
+              const trueValues = ['true', 'yes', '1', 't', 'y'];
+
+              if (value === true || trueValues.includes(val)) {
+                element.checked = true;
+                element.dispatchEvent(new Event('click', { bubbles: true }));
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+                results.filled.push({ field: fieldIdentifier, type: 'radio', value: true });
+              }
+            } else if (fieldType === 'select') {
+              let option = Array.from(element.options).find(opt =>
+                opt.value === String(value) || opt.text === String(value)
+              );
+
+              if (!option) {
+                option = Array.from(element.options).find(opt =>
+                  fuzzyMatchOption(value, opt.value, opt.text)
+                );
+              }
+
+              if (option) {
+                element.value = option.value;
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+                results.filled.push({ field: fieldIdentifier, type: 'select', value: option.text });
+                console.log(`Set select: ${fieldIdentifier} = ${option.text} (matched from: ${value})`);
+              } else {
+                console.warn(`Option not found in select ${fieldIdentifier}:`, value);
+                console.warn(`Available options:`, Array.from(element.options).map(o => `"${o.value}" / "${o.text}"`));
+                results.errors.push({ field: fieldIdentifier, error: 'Option not found' });
+              }
+            } else {
+              element.value = String(value);
+              element.dispatchEvent(new Event('input', { bubbles: true }));
+              element.dispatchEvent(new Event('change', { bubbles: true }));
+              results.filled.push({ field: fieldIdentifier, type: fieldType, value: value });
+            }
+          } catch (error) {
+            console.error(`Error filling field ${fieldIdentifier}:`, error);
+            results.errors.push({ field: fieldIdentifier, error: error.message });
+          }
+        }
+
+        console.log('Fill results:', results);
+        return results;
+      },
+      args: [fillValues]
+    });
+
+    const result = fillResults[0]?.result;
+
+    if (result) {
+      const filledCount = result.filled?.length || 0;
+      const notFoundCount = result.notFound?.length || 0;
+      const errorCount = result.errors?.length || 0;
+
+      if (filledCount > 0) {
+        statusDiv.textContent = `Filled ${filledCount} field${filledCount !== 1 ? 's' : ''}${notFoundCount > 0 ? `, ${notFoundCount} not found` : ''}${errorCount > 0 ? `, ${errorCount} error${errorCount !== 1 ? 's' : ''}` : ''}`;
+        statusDiv.className = 'status success';
+      } else {
+        statusDiv.textContent = 'No fields were filled. Check console for details.';
+        statusDiv.className = 'status';
+      }
+
+      console.log('Fill results:', result);
+    } else {
+      statusDiv.textContent = 'Form filled (no result returned)';
+      statusDiv.className = 'status';
+    }
 
   } catch (error) {
     console.error('Error filling form:', error);
     statusDiv.textContent = `Error: ${error.message}`;
     statusDiv.className = 'status error';
   } finally {
-    // Re-enable button
-    fillButton.disabled = false;
+    // Re-enable button with 2-second cooldown
+    await enableButtonWithCooldown(fillButton, 2000);
   }
 });
 
@@ -434,6 +660,9 @@ clearButton.addEventListener('click', async () => {
 // Initialize: Load saved state when popup opens
 (async function init() {
   console.log('Form scanner popup loaded');
+
+  // Setup collapsible sections
+  setupCollapsibleSections();
 
   try {
     // Get current tab

@@ -19,11 +19,12 @@
   "task_models": {
     "address_lookup": "haiku",
     "company_research": "sonnet",
+    "company_research_search": "haiku",
+    "company_research_synthesize": "sonnet",
     "why_paragraph": "sonnet",
     "style_rewrite": "haiku",
-    "field_matching": "haiku",
-    "freeform_answer": "haiku",
-    "specific_question": "haiku"
+    "form_analysis": "haiku",
+    "application_content": "haiku"
   },
   "api_settings": {
     "retry_attempts": 3,

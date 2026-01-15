@@ -7,29 +7,25 @@ This directory contains all prompt templates used by the job application tool fo
 ```mermaid
 graph TD
     subgraph "Cover Letter Generation"
-        A[address_lookup_prompt.md] -->|company address| B[company_research_prompt.md]
-        B -->|company context| C[why_company_prompt.md]
-        D[my_background.md] -->|user background| C
-        C -->|initial paragraph| E[style_rewrite_prompt.md]
-        E -->|final paragraph| F[Cover Letter DOCX]
+        A[address_lookup_prompt.md] -->|company address| B[company_research_search_prompt.md]
+        B -->|raw facts| C[company_research_synthesize_prompt.md]
+        C -->|company context| D[why_company_prompt.md]
+        E[my_background.md] -->|user background| D
+        D -->|initial paragraph| F[style_rewrite_prompt.md]
+        F -->|final paragraph| G[Cover Letter DOCX]
     end
 
-    subgraph "Form Field Matching"
-        G[field_matching_prompt.md] -->|field mapping| H[Browser Extension]
-        I[user-data/profile.json] -->|profile data| G
-        J[Form Fields] -->|scanned fields| G
+    subgraph "Form Processing (3-Phase)"
+        H[Form Fields] -->|scanned fields| I[form_analysis_prompt.md]
+        I -->|field guidance + dropdown selections| J[field_matching_prompt.md]
+        K[user-data/profile.json] -->|profile data| J
+        I -->|form analysis| J
+        J -->|field mappings| L[application_content_prompt.md]
+        G -->|cover letter text| L
+        F -->|why paragraph| L
+        I -->|form analysis| L
+        L -->|generated content| M[Filled Form]
     end
-
-    subgraph "Future: Auto-Fill"
-        H -->|unmapped fields| K[freeform_answer_prompt.md]
-        H -->|specific questions| L[specific_question_prompt.md]
-        K --> M[Filled Form]
-        L --> M
-    end
-
-    style K fill:#f0f0f0,stroke:#ccc,stroke-dasharray: 5 5
-    style L fill:#f0f0f0,stroke:#ccc,stroke-dasharray: 5 5
-    style M fill:#f0f0f0,stroke:#ccc,stroke-dasharray: 5 5
 ```
 
 ## Prompt Inventory
@@ -37,25 +33,37 @@ graph TD
 | Prompt File | Purpose | Inputs | Outputs | Model |
 |-------------|---------|--------|---------|-------|
 | `address_lookup_prompt.md` | Find company headquarters or office address | `company_name`, `role_location_if_known` | `ADDRESS_LINE1`, `ADDRESS_LINE2` (structured text) | haiku |
-| `company_research_prompt.md` | Research company and role context | `company_name`, `role_title`, `job_description` | Structured company context (products, metrics, problems, recent activity) | sonnet |
+| `company_research_search_prompt.md` | Gather raw facts about company (Phase 1) | `company_name`, `role_title` | Raw facts as bullet points | haiku |
+| `company_research_synthesize_prompt.md` | Synthesize raw facts into context (Phase 2) | `company_name`, `role_title`, `raw_facts`, `job_description` | Structured company context (COMPANY_CONTEXT, ROLE_RELEVANCE, RECENT_NEWS) | sonnet |
 | `why_company_prompt.md` | Generate "why I want to work here" paragraph | `company_name`, `role_title`, `company_context`, `my_background`, `job_description` | Cover letter paragraph (plain text) | sonnet |
 | `style_rewrite_prompt.md` | Rewrite paragraph for style and clarity | `paragraph` | Rewritten paragraph (max 4 sentences, simplified) | haiku |
-| `field_matching_prompt.md` | Match form fields to user profile data | `profile` (JSON), `form_fields` (JSON) | JSON mapping: field ID → profile path or special value | haiku |
-| `freeform_answer_prompt.md` | Answer open-ended job application questions | `question`, `my_background`, `company_context` | 2-4 sentence answer (plain text) | haiku |
-| `specific_question_prompt.md` | Answer specific questions from profile data | `question`, `profile` (JSON) | Brief answer or "NEEDS_HUMAN" | haiku |
+| `form_analysis_prompt.md` | Analyze form structure and provide guidance | `form_fields` (JSON with options for dropdowns/radios/checkboxes) | JSON with `field_guidance` and `dropdown_selections` | haiku |
+| `field_matching_prompt.md` | Match form fields to values using analysis | `profile` (JSON), `form_analysis` (JSON) | JSON mapping: field ID → actual value or action string | haiku |
+| `application_content_prompt.md` | Generate text content for fields | `cover_letter_text`, `why_paragraph`, `profile`, `fields_json`, `form_analysis` | JSON mapping: field ID → generated text | haiku |
 | `my_background.md` | User's professional background (static context) | N/A (user-edited content) | Used as context input for `why_company_prompt.md` | N/A |
 
-### Special Values for Field Matching
+### Form Processing Flow
 
-The `field_matching_prompt.md` can return these special values:
+**Phase 1: Form Analysis** (`form_analysis_prompt.md`)
+- Analyzes form holistically with dropdown/radio/checkbox options
+- Returns `field_guidance` with actions and `dropdown_selections`
 
-- **Profile paths**: e.g., `"personal.first_name"`, `"personal.email"`
-- **`RESUME_UPLOAD`**: Resume/CV file upload fields
-- **`COVER_LETTER`**: Why this company/role, motivation statement fields
-- **`FREEFORM_ANSWER`**: Open-ended questions needing written response
-- **`SPECIFIC_QUESTION`**: Answerable questions not in profile (e.g., salary, notice period)
-- **`SKIP`**: Demographic/EEO fields user should review themselves
-- **`UNKNOWN`**: Cannot determine, needs human review
+**Phase 2: Field Matching** (`field_matching_prompt.md`)
+- Uses guidance to map fields to actual values or action strings
+- Returns actual profile values or action types:
+  - **`RESUME_UPLOAD`**: Resume/CV file upload fields
+  - **`COVER_LETTER_FULL`**: Full cover letter with header
+  - **`COVER_LETTER_BODY`**: Cover letter body without header
+  - **`COVER_LETTER_WHY`**: Just the why-company paragraph
+  - **`GENERATE_ANSWER`**: Generate contextual answer using profile and cover letter
+  - **`ACKNOWLEDGE_TRUE`**: Checkboxes for agreements/acknowledgments
+  - **`NEEDS_HUMAN`**: Cannot answer, requires human input
+  - **`SKIP`**: Demographic/EEO fields user should review
+
+**Phase 3: Content Generation** (`application_content_prompt.md`)
+- Generates text content for fields marked with content actions
+- Uses form analysis to avoid duplication across fields
+- Has access to full cover letter, why paragraph only, and profile
 
 ## Model Configuration
 
@@ -65,18 +73,19 @@ Models are assigned to prompts in `config.json` under `task_models`:
 {
   "task_models": {
     "address_lookup": "haiku",
-    "company_research": "sonnet",
+    "company_research_search": "haiku",
+    "company_research_synthesize": "sonnet",
     "why_paragraph": "sonnet",
     "style_rewrite": "haiku",
+    "form_analysis": "haiku",
     "field_matching": "haiku",
-    "freeform_answer": "haiku",
-    "specific_question": "haiku"
+    "application_content": "haiku"
   }
 }
 ```
 
-- **Haiku**: Fast, cheap model for simple tasks (address lookup, style rewrite, field matching, freeform answers, specific questions)
-- **Sonnet**: Balanced model for complex reasoning (company research, paragraph generation)
+- **Haiku**: Fast, cheap model for simple tasks (address lookup, style rewrite, form analysis, field matching, content generation, company research search)
+- **Sonnet**: Balanced model for complex reasoning (company research synthesis, why paragraph generation)
 - **Opus**: Best quality (currently unused, available for future use)
 
 ## Adding New Prompts
@@ -231,4 +240,4 @@ This generates `prompts/USAGE.md` with a complete usage map showing:
 
 The usage report is automatically regenerated each time you run the script.
 
-**Last updated**: 2026-01-14
+**Last updated**: 2026-01-15

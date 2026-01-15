@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test Form - Job Application</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 600px;
+      margin: 40px auto;
+      padding: 20px;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    input[type="text"],
+    input[type="email"] {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    .checkbox-group {
+      margin: 12px 0;
+    }
+    .checkbox-group label {
+      display: flex;
+      align-items: center;
+      font-weight: normal;
+      cursor: pointer;
+    }
+    .checkbox-group input[type="checkbox"] {
+      margin-right: 8px;
+    }
+    button {
+      background: #4285f4;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    button:hover {
+      background: #357ae8;
+    }
+    .hint {
+      font-size: 12px;
+      color: #666;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Job Application Test Form</h1>
+
+  <form id="testForm">
+    <div class="form-group">
+      <label for="first_name">First Name</label>
+      <input type="text" id="first_name" name="first_name">
+    </div>
+
+    <div class="form-group">
+      <label for="email">Email Address</label>
+      <input type="email" id="email" name="email">
+    </div>
+
+    <div class="form-group">
+      <label for="phone">Phone Number</label>
+      <input type="text" id="phone" name="phone">
+    </div>
+
+    <div class="form-group">
+      <label>Work Authorization</label>
+      <div class="checkbox-group">
+        <label>
+          <input type="checkbox" id="requires_sponsorship" name="requires_sponsorship">
+          I require sponsorship to work in the US
+        </label>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Agreements</label>
+
+      <div class="checkbox-group">
+        <label>
+          <input type="checkbox" id="agree_terms" name="agree_terms" required>
+          I agree to the Terms of Service
+        </label>
+      </div>
+
+      <div class="checkbox-group">
+        <label>
+          <input type="checkbox" id="certify_info" name="certify_info" required>
+          I certify that the information provided is accurate
+        </label>
+      </div>
+
+      <div class="checkbox-group">
+        <label>
+          <input type="checkbox" id="acknowledge_privacy" name="acknowledge_privacy" required>
+          I acknowledge that I have read the Privacy Policy
+        </label>
+      </div>
+
+      <div class="checkbox-group">
+        <label>
+          <input type="checkbox" id="consent_background" name="consent_background">
+          I consent to a background check
+        </label>
+      </div>
+    </div>
+
+    <button type="submit">Submit Application</button>
+  </form>
+
+  <script>
+    // Listen for change events to demonstrate they're being triggered
+    document.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+      checkbox.addEventListener('change', (e) => {
+        console.log(`Checkbox ${e.target.id} changed to: ${e.target.checked}`);
+      });
+
+      checkbox.addEventListener('click', (e) => {
+        console.log(`Checkbox ${e.target.id} clicked`);
+      });
+    });
+
+    document.getElementById('testForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      console.log('Form submitted!');
+
+      const formData = new FormData(e.target);
+      const data = {};
+      formData.forEach((value, key) => {
+        data[key] = value;
+      });
+
+      // Also get checkbox states
+      document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        data[cb.id] = cb.checked;
+      });
+
+      console.log('Form data:', data);
+      alert('Form submitted! Check console for data.');
+    });
+  </script>
+</body>
+</html>

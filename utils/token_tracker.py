@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from .logger import PrettyLogger
 
 
 class TokenTracker:
@@ -21,15 +22,10 @@ class TokenTracker:
         """Initialize tracker.
 
         Args:
-            log_file: Optional path to JSONL file for persistent logging
+            log_file: Optional filename for persistent logging (in logs/ directory)
         """
         self.calls = []
-        self.log_file = log_file or "logs/token_usage.jsonl"
-
-        # Create logs directory if it doesn't exist
-        log_dir = os.path.dirname(self.log_file)
-        if log_dir:
-            os.makedirs(log_dir, exist_ok=True)
+        self.logger = PrettyLogger(filename=log_file or "token_usage.log")
 
     def log_call(
         self,
@@ -79,10 +75,20 @@ class TokenTracker:
         # Store in memory
         self.calls.append(call_record)
 
-        # Append to JSONL file
+        # Log using PrettyLogger
         try:
-            with open(self.log_file, "a") as f:
-                f.write(json.dumps(call_record) + "\n")
+            log_data = {
+                "task": task_name,
+                "model": model_key,
+                "tokens_in": f"{input_tokens:,}",
+                "tokens_out": f"{output_tokens:,}",
+                "total": f"{input_tokens + output_tokens:,}",
+                "cost": f"${cost_estimate:.6f}"
+            }
+            if metadata:
+                log_data["metadata"] = str(metadata)
+
+            self.logger.log(f"API_CALL", log_data)
         except Exception as e:
             print(f"Warning: Could not write to log file: {e}")
 
@@ -141,23 +147,40 @@ class TokenTracker:
         }
 
     def export_log(self, filepath: str):
-        """Save full log to JSON file.
+        """Save session summary to pretty log file.
 
         Args:
-            filepath: Path to output JSON file
+            filepath: Path to output log file (will use PrettyLogger format)
         """
-        export_data = {
-            "exported_at": datetime.utcnow().isoformat(),
-            "session_total": self.get_session_total(),
-            "summary": list(self.get_summary().values()),
-            "calls": self.calls
-        }
+        # Create a temporary logger for the export
+        log_dir = os.path.dirname(filepath)
+        filename = os.path.basename(filepath)
+        export_logger = PrettyLogger(log_dir=log_dir, filename=filename)
 
-        # Create directory if needed
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        # Export session summary
+        session = self.get_session_total()
+        export_logger.log("SESSION_SUMMARY", {
+            "call_count": session['call_count'],
+            "total_tokens": f"{session['total_tokens']:,}",
+            "input_tokens": f"{session['total_input_tokens']:,}",
+            "output_tokens": f"{session['total_output_tokens']:,}",
+            "total_cost": f"${session['total_cost']:.6f}",
+            "exported_at": datetime.utcnow().isoformat()
+        })
 
-        with open(filepath, "w") as f:
-            json.dump(export_data, f, indent=2)
+        # Export task/model summary
+        summary = self.get_summary()
+        if summary:
+            for key, data in sorted(summary.items()):
+                export_logger.log("TASK_SUMMARY", {
+                    "task": data['task_name'],
+                    "model": data['model'],
+                    "calls": data['call_count'],
+                    "tokens_in": f"{data['input_tokens']:,}",
+                    "tokens_out": f"{data['output_tokens']:,}",
+                    "total": f"{data['total_tokens']:,}",
+                    "cost": f"${data['cost_estimate']:.6f}"
+                })
 
         print(f"Token log exported to {filepath}")
 
