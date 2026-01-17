@@ -24,7 +24,9 @@
     "why_paragraph": "sonnet",
     "style_rewrite": "haiku",
     "form_analysis": "haiku",
-    "application_content": "haiku"
+    "application_content": "haiku",
+    "company_name_extraction": "haiku",
+    "role_title_cleaning": "haiku"
   },
   "api_settings": {
     "retry_attempts": 3,

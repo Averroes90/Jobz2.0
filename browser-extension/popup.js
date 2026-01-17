@@ -1,3 +1,7 @@
+// Extension version for debugging
+const EXTENSION_VERSION = 'v2.0-20260116-2100';
+console.log('🔧 Extension popup loaded:', EXTENSION_VERSION);
+
 // Get DOM elements
 const scanButton = document.getElementById('scanButton');
 const sendButton = document.getElementById('sendButton');
@@ -244,6 +248,7 @@ function displayStructuredResponse(data) {
     fileKeys.forEach(fileType => {
       const path = files[fileType];
       const fileName = path.split('/').pop();
+      // Show actual filename from backend
       html += `<li><strong>${fileType}:</strong> ${fileName}</li>`;
     });
     html += '</ul>';
@@ -361,6 +366,12 @@ roleInput.addEventListener('change', saveState);
 
 // Handle send to backend button click
 sendButton.addEventListener('click', async () => {
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('📤 SEND TO BACKEND BUTTON CLICKED');
+  console.log('Timestamp:', new Date().toISOString());
+  console.log('Call stack:', new Error().stack);
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
   if (!scannedData) {
     statusDiv.textContent = 'No scanned data available. Please scan first.';
     statusDiv.className = 'status error';
@@ -373,13 +384,17 @@ sendButton.addEventListener('click', async () => {
     statusDiv.textContent = 'Sending to backend...';
     statusDiv.className = 'status';
 
+    console.log('📤 Preparing to call /api/match-fields...');
+
     // Include edited job details in the data
     const dataToSend = {
       ...scannedData,
       jobDetails: {
         company_name: companyInput.value,
         role_title: roleInput.value,
-        job_description: scannedData.jobDetails?.job_description || ''
+        job_location: scannedData.jobDetails?.job_location || '',
+        job_description: scannedData.jobDetails?.job_description || '',
+        company_name_context: scannedData.jobDetails?.company_name_context || null
       }
     };
 
@@ -454,7 +469,15 @@ sendButton.addEventListener('click', async () => {
 
 // Handle fill form button click
 fillButton.addEventListener('click', async () => {
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('🔘 FILL FORM BUTTON CLICKED');
+  console.log('Timestamp:', new Date().toISOString());
+  console.log('backendResponse exists?', !!backendResponse);
+  console.log('scannedData exists?', !!scannedData);
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
   if (!backendResponse) {
+    console.error('❌ No backend response - stopping fill');
     statusDiv.textContent = 'No backend response available. Please send to backend first.';
     statusDiv.className = 'status error';
     return;
@@ -466,6 +489,8 @@ fillButton.addEventListener('click', async () => {
     statusDiv.textContent = 'Filling form...';
     statusDiv.className = 'status';
 
+    console.log('✓ backendResponse available, proceeding with fill');
+
     // Get the active tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
@@ -473,34 +498,77 @@ fillButton.addEventListener('click', async () => {
       throw new Error('No active tab found');
     }
 
+    console.log('✓ Active tab ID:', tab.id);
+
     // Execute the fill function directly
     const fillValues = backendResponse.fill_values || {};
     const files = backendResponse.files || {};
     const fieldMappings = backendResponse.field_mappings || {};
 
-    console.log('Filling form with values:', fillValues);
-    console.log('Files to upload:', files);
+    console.log('📝 Filling form with values:', fillValues);
+    console.log('📁 Files to upload:', files);
+
+    // Prepare field metadata (options) for combobox handling
+    const fieldMetadata = {};
+    let fieldsWithOptions = 0;
+    let fieldsWithoutOptions = 0;
+
+    if (scannedData && scannedData.fields) {
+      scannedData.fields.forEach(field => {
+        if (field.options && field.options.length > 0) {
+          fieldMetadata[field.id] = {
+            options: field.options,
+            label: field.label
+          };
+          fieldsWithOptions++;
+          console.log(`✓ Field ${field.id} (${field.label}) has ${field.options.length} options`);
+        } else if (field.type === 'combobox' || field.input_type === 'custom_select') {
+          fieldsWithoutOptions++;
+          console.warn(`⚠️ Combobox field ${field.id} (${field.label}) has NO options!`);
+        }
+      });
+    }
+
+    console.log(`📊 Field metadata summary: ${fieldsWithOptions} fields WITH options, ${fieldsWithoutOptions} comboboxes WITHOUT options`);
+    console.log('Field metadata (with options):', fieldMetadata);
 
     // Execute fillFormFields function directly by injecting it
     const fillResults = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: (fillValues) => {
+      func: async (fillValues, fieldMetadata) => {
+        console.log('=== FILL SCRIPT EXECUTING ===');
+        console.log('Received fill values:', fillValues);
+        console.log('Received field metadata:', fieldMetadata);
+
+        // Detect page navigation during fill
+        let pageNavigated = false;
+        const navigationDetector = () => {
+          pageNavigated = true;
+          console.error('⚠️⚠️⚠️ PAGE NAVIGATION DETECTED DURING FILL! ⚠️⚠️⚠️');
+        };
+        window.addEventListener('beforeunload', navigationDetector);
+        window.addEventListener('unload', navigationDetector);
+
         // Define helper functions inline
         function getFieldType(element) {
+          const role = element.getAttribute('role');
+          if (role === 'combobox' || role === 'listbox') return 'combobox';
           if (element.tagName === 'SELECT') return 'select';
           if (element.tagName === 'TEXTAREA') return 'textarea';
           if (element.tagName === 'INPUT') return element.type || 'text';
           return 'unknown';
         }
 
-        // Fuzzy match helper function
+        // Fuzzy match helper function with smart substring/token matching
         function fuzzyMatchOption(value, optionValue, optionText) {
           const val = String(value).toLowerCase().trim();
           const optVal = String(optionValue).toLowerCase().trim();
           const optTxt = String(optionText).toLowerCase().trim();
 
+          // 1. Exact match
           if (val === optVal || val === optTxt) return true;
 
+          // 2. Boolean variations
           const trueValues = ['true', 'yes', '1', 't', 'y'];
           const falseValues = ['false', 'no', '0', 'f', 'n'];
 
@@ -511,6 +579,7 @@ fillButton.addEventListener('click', async () => {
             return falseValues.includes(optVal) || falseValues.includes(optTxt);
           }
 
+          // 3. Country variations
           const countryVariations = {
             'united states': ['us', 'usa', 'u.s.', 'u.s.a.', 'united states of america'],
             'united kingdom': ['uk', 'u.k.', 'great britain', 'gb'],
@@ -526,6 +595,95 @@ fillButton.addEventListener('click', async () => {
             }
           }
 
+          // 4. Gender/sexuality/identity synonyms
+          const genderSexualityVariations = {
+            'heterosexual': ['straight', 'hetero'],
+            'homosexual': ['gay', 'lesbian'],
+            'bisexual': ['bi'],
+            'non-binary': ['nonbinary', 'non binary', 'enby', 'nb'],
+            'transgender': ['trans'],
+            'man': ['male'],
+            'woman': ['female'],
+            'prefer not to say': ['prefer not to answer', 'decline to state', 'decline']
+          };
+
+          for (const [canonical, variations] of Object.entries(genderSexualityVariations)) {
+            if (val === canonical || variations.includes(val)) {
+              if (optVal === canonical || variations.includes(optVal) ||
+                  optTxt === canonical || variations.includes(optTxt)) {
+                return true;
+              }
+            }
+            // Also check reverse: if option is canonical and value is variation
+            if (optVal === canonical || optTxt === canonical) {
+              if (variations.includes(val)) {
+                return true;
+              }
+            }
+          }
+
+          // 5. Simple substring match (but watch out for negation opposites)
+          // e.g., "White" matches "White (Not Hispanic or Latino)"
+          if (optTxt.includes(val) || val.includes(optTxt)) {
+            // Remove parenthetical content before checking negation
+            // Parentheses usually contain clarifications, not negations of the main value
+            const valNoParens = val.replace(/\([^)]*\)/g, '').trim();
+            const optNoParens = optTxt.replace(/\([^)]*\)/g, '').trim();
+
+            // Remove all negation-related words and compare
+            const cleanVal = valNoParens.replace(/\b(not|no|non|never)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+            const cleanOpt = optNoParens.replace(/\b(not|no|non|never)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+
+            // If they're the same after removing negation words
+            if (cleanVal === cleanOpt || (cleanVal.length > 0 && cleanOpt.includes(cleanVal)) || (cleanOpt.length > 0 && cleanVal.includes(cleanOpt))) {
+              // They differ only in negation - check if negation status matches
+              const valHasNeg = /\b(not|no|non|never)\b/i.test(valNoParens);
+              const optHasNeg = /\b(not|no|non|never)\b/i.test(optNoParens);
+
+              if (valHasNeg !== optHasNeg) {
+                return false; // Opposite meanings
+              }
+            }
+
+            return true; // Substring match and safe
+          }
+
+          // 5. Extract content words for smarter matching
+          const stopwords = ['a', 'an', 'the', 'i', 'am', 'is', 'or', 'and'];
+          const valTokens = val.split(/\s+/).filter(t => t.length > 1 && !stopwords.includes(t));
+          const optTokens = optTxt.split(/\s+/).filter(t => t.length > 1 && !stopwords.includes(t));
+
+          // 6. For veteran/negation-heavy fields, check negation semantics
+          // Only if both strings mention the same core concept (e.g., both contain "veteran")
+          const hasSharedConcept = valTokens.some(vt =>
+            optTokens.some(ot =>
+              (vt.includes(ot) || ot.includes(vt)) &&
+              !['not', 'no', 'non', 'never'].includes(vt) &&
+              !['not', 'no', 'non', 'never'].includes(ot)
+            )
+          );
+
+          if (hasSharedConcept) {
+            // They're talking about the same thing - check if negation aligns
+            const hasNegation = /\b(not|no|non|never)\b/.test(val);
+            const optHasNegation = /\b(not|no|non|never)\b/.test(optTxt);
+
+            // If they share a concept but differ on negation, they're opposites
+            // e.g., "I am a veteran" vs "I am not a veteran"
+            if (hasNegation !== optHasNegation) {
+              return false;
+            }
+          }
+
+          // 7. Token overlap for general matching
+          if (valTokens.length > 0 && optTokens.length > 0) {
+            const matchingTokens = valTokens.filter(vt =>
+              optTokens.some(ot => ot.includes(vt) || vt.includes(ot))
+            );
+            const overlapRatio = matchingTokens.length / Math.min(valTokens.length, optTokens.length);
+            if (overlapRatio >= 0.5) return true;
+          }
+
           return false;
         }
 
@@ -536,44 +694,121 @@ fillButton.addEventListener('click', async () => {
           notFound: []
         };
 
+        console.log('Starting to fill', Object.keys(fillValues).length, 'fields');
+
         for (const [fieldIdentifier, value] of Object.entries(fillValues)) {
           try {
+            console.log('🔍 [CHECKPOINT:fillForm:ProcessingField]', { fieldIdentifier, value });
+
             let element = document.getElementById(fieldIdentifier);
+            let lookupMethod = 'getElementById';
+
             if (!element) {
               element = document.querySelector(`[name="${fieldIdentifier}"]`);
+              lookupMethod = 'querySelector[name]';
             }
             if (!element && /^\d+$/.test(fieldIdentifier)) {
               const inputs = document.querySelectorAll('input, select, textarea');
               element = inputs[parseInt(fieldIdentifier)];
+              lookupMethod = 'index';
+            }
+            // Try to find button group containers
+            if (!element) {
+              element = document.querySelector(`[role="radiogroup"][id="${fieldIdentifier}"], [role="group"][id="${fieldIdentifier}"], [data-field-id="${fieldIdentifier}"], [data-question-id="${fieldIdentifier}"]`);
+              lookupMethod = 'querySelector[role]';
             }
 
             if (!element) {
-              console.warn(`Field not found: ${fieldIdentifier}`);
+              console.log('❌ [CHECKPOINT:fillForm:ElementNotFound]', { fieldIdentifier, triedMethods: ['getElementById', 'querySelector[name]', 'index', 'querySelector[role]'] });
               results.notFound.push(fieldIdentifier);
               continue;
             }
 
-            const fieldType = getFieldType(element);
+            console.log('✅ [CHECKPOINT:fillForm:ElementFound]', {
+              fieldIdentifier,
+              lookupMethod,
+              elementTag: element.tagName,
+              elementType: element.type,
+              elementRole: element.getAttribute('role')
+            });
+
+            // Skip if this element is or contains a file input - files are handled separately
+            const isFileInput = element.type === 'file';
+            const containsFileInput = element.querySelector && element.querySelector('input[type="file"]') !== null;
+            if (isFileInput || containsFileInput) {
+              console.log('⏭️ [CHECKPOINT:fillForm:SkippingFileContainer]', {
+                fieldIdentifier,
+                reason: isFileInput ? 'Element is file input' : 'Element contains file input'
+              });
+              continue;
+            }
+
+            // Check if this is a button group (either by ID prefix or by having button children)
+            const buttonCount = element.querySelectorAll('button:not([type="submit"]), [role="button"], [role="radio"]').length;
+            const isButtonGroup = fieldIdentifier.startsWith('button_group_') || buttonCount >= 2;
+
+            // Check if this is a combobox (by ID prefix or role attribute)
+            const isCombobox = fieldIdentifier.startsWith('combobox_') ||
+                              element.getAttribute('role') === 'combobox' ||
+                              element.getAttribute('role') === 'listbox';
+
+            let fieldType;
+            if (isButtonGroup) {
+              fieldType = 'button_group';
+            } else if (isCombobox) {
+              fieldType = 'combobox';
+            } else {
+              fieldType = getFieldType(element);
+            }
+
+            console.log('🔍 [CHECKPOINT:fillForm:TypeDetection]', {
+              fieldIdentifier,
+              detectedType: fieldType,
+              checks: {
+                startsWithButtonGroup: fieldIdentifier.startsWith('button_group_'),
+                buttonCount,
+                isButtonGroup,
+                startsWithCombobox: fieldIdentifier.startsWith('combobox_'),
+                role: element.getAttribute('role'),
+                isCombobox
+              }
+            });
+
+            // Skip file inputs during text filling - they will be handled in file upload step
+            if (fieldType === 'file') {
+              console.log('⏭️ [CHECKPOINT:fillForm:SkippingFileInput]', { fieldIdentifier, reason: 'File inputs handled separately' });
+              continue;
+            }
 
             if (fieldType === 'checkbox') {
               const val = String(value).toLowerCase().trim();
               const trueValues = ['true', 'yes', '1', 't', 'y'];
               const falseValues = ['false', 'no', '0', 'f', 'n'];
 
+              element.focus();
+
               if (value === true || trueValues.includes(val)) {
-                element.checked = true;
-                element.dispatchEvent(new Event('click', { bubbles: true }));
-                element.dispatchEvent(new Event('change', { bubbles: true }));
+                if (!element.checked) {
+                  element.checked = true;
+                  element.dispatchEvent(new Event('click', { bubbles: true }));
+                  element.dispatchEvent(new Event('change', { bubbles: true }));
+                }
                 results.filled.push({ field: fieldIdentifier, type: 'checkbox', value: true });
               } else if (value === false || falseValues.includes(val)) {
-                element.checked = false;
-                element.dispatchEvent(new Event('click', { bubbles: true }));
-                element.dispatchEvent(new Event('change', { bubbles: true }));
+                if (element.checked) {
+                  element.checked = false;
+                  element.dispatchEvent(new Event('click', { bubbles: true }));
+                  element.dispatchEvent(new Event('change', { bubbles: true }));
+                }
                 results.filled.push({ field: fieldIdentifier, type: 'checkbox', value: false });
               }
+
+              element.blur();
             } else if (fieldType === 'radio') {
               const val = String(value).toLowerCase().trim();
               const trueValues = ['true', 'yes', '1', 't', 'y'];
+
+              element.focus();
 
               if (value === true || trueValues.includes(val)) {
                 element.checked = true;
@@ -581,6 +816,8 @@ fillButton.addEventListener('click', async () => {
                 element.dispatchEvent(new Event('change', { bubbles: true }));
                 results.filled.push({ field: fieldIdentifier, type: 'radio', value: true });
               }
+
+              element.blur();
             } else if (fieldType === 'select') {
               let option = Array.from(element.options).find(opt =>
                 opt.value === String(value) || opt.text === String(value)
@@ -593,8 +830,11 @@ fillButton.addEventListener('click', async () => {
               }
 
               if (option) {
+                element.focus();
                 element.value = option.value;
                 element.dispatchEvent(new Event('change', { bubbles: true }));
+                element.dispatchEvent(new Event('blur', { bubbles: true }));
+                element.blur();
                 results.filled.push({ field: fieldIdentifier, type: 'select', value: option.text });
                 console.log(`Set select: ${fieldIdentifier} = ${option.text} (matched from: ${value})`);
               } else {
@@ -602,10 +842,264 @@ fillButton.addEventListener('click', async () => {
                 console.warn(`Available options:`, Array.from(element.options).map(o => `"${o.value}" / "${o.text}"`));
                 results.errors.push({ field: fieldIdentifier, error: 'Option not found' });
               }
+            } else if (fieldType === 'button_group') {
+              // Handle button-based option groups
+              console.log('🔍 [CHECKPOINT:fillForm:ButtonGroup:Entry]', { fieldIdentifier, value });
+
+              const buttons = element.querySelectorAll('button:not([type="submit"]), [role="radio"], [role="button"]');
+              const buttonTexts = Array.from(buttons).map(b => b.textContent.trim());
+
+              console.log('🔍 [CHECKPOINT:fillForm:ButtonGroup:ButtonsFound]', {
+                fieldIdentifier,
+                buttonCount: buttons.length,
+                buttonTexts: buttonTexts
+              });
+
+              let matchedButton = null;
+
+              // Try exact match first
+              for (const btn of buttons) {
+                const btnValue = btn.getAttribute('value') || btn.getAttribute('data-value') || btn.textContent.trim();
+                const btnText = btn.textContent.trim();
+
+                if (btnValue === String(value) || btnText === String(value)) {
+                  matchedButton = btn;
+                  console.log('🔍 [CHECKPOINT:fillForm:ButtonGroup:ExactMatch]', { matched: btnText, value });
+                  break;
+                }
+              }
+
+              // Try fuzzy match
+              if (!matchedButton) {
+                console.log('🔍 [CHECKPOINT:fillForm:ButtonGroup:TryingFuzzyMatch]', { value });
+                for (const btn of buttons) {
+                  const btnValue = btn.getAttribute('value') || btn.getAttribute('data-value') || btn.textContent.trim();
+                  const btnText = btn.textContent.trim();
+
+                  if (fuzzyMatchOption(value, btnValue, btnText)) {
+                    matchedButton = btn;
+                    console.log('🔍 [CHECKPOINT:fillForm:ButtonGroup:FuzzyMatch]', { matched: btnText, value });
+                    break;
+                  }
+                }
+              }
+
+              if (matchedButton) {
+                console.log('🔍 [CHECKPOINT:fillForm:ButtonGroup:ClickingButton]', {
+                  fieldIdentifier,
+                  buttonText: matchedButton.textContent.trim(),
+                  value
+                });
+
+                // Simulate real user interaction
+                matchedButton.focus();
+                matchedButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                matchedButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                matchedButton.click();
+                matchedButton.dispatchEvent(new Event('change', { bubbles: true }));
+                matchedButton.blur();
+
+                results.filled.push({ field: fieldIdentifier, type: 'button_group', value: matchedButton.textContent.trim() });
+                console.log('✅ [CHECKPOINT:fillForm:ButtonGroup:Success]', {
+                  fieldIdentifier,
+                  clicked: matchedButton.textContent.trim()
+                });
+              } else {
+                console.log('❌ [CHECKPOINT:fillForm:ButtonGroup:NoMatch]', {
+                  fieldIdentifier,
+                  searchValue: value,
+                  availableButtons: buttonTexts
+                });
+                results.errors.push({ field: fieldIdentifier, error: 'Button not found' });
+              }
+            } else if (fieldType === 'combobox') {
+              // Handle ARIA combobox using pre-extracted options from scan
+              console.log('🔍 [CHECKPOINT:fillForm:Combobox:Entry]', { fieldIdentifier, value });
+
+              // Get pre-extracted options from field metadata
+              const metadata = fieldMetadata[fieldIdentifier];
+
+              if (!metadata || !metadata.options || metadata.options.length === 0) {
+                console.warn('❌ [CHECKPOINT:fillForm:Combobox:NoPreExtractedOptions]', { fieldIdentifier });
+                results.errors.push({ field: fieldIdentifier, error: 'No pre-extracted options available' });
+              } else {
+                console.log('🔍 [CHECKPOINT:fillForm:Combobox:UsingPreExtractedOptions]', {
+                  fieldIdentifier,
+                  optionCount: metadata.options.length,
+                  first5: metadata.options.slice(0, 5).map(o => o.text)
+                });
+
+                // Find matching option using fuzzy matching
+                let matchedOption = null;
+
+                // Try exact match first
+                for (const opt of metadata.options) {
+                  if (opt.value === String(value) || opt.text === String(value)) {
+                    matchedOption = opt;
+                    console.log('🔍 [CHECKPOINT:fillForm:Combobox:ExactMatch]', { text: opt.text });
+                    break;
+                  }
+                }
+
+                // Try fuzzy match if exact match not found
+                if (!matchedOption) {
+                  for (const opt of metadata.options) {
+                    if (fuzzyMatchOption(value, opt.value, opt.text)) {
+                      matchedOption = opt;
+                      console.log('🔍 [CHECKPOINT:fillForm:Combobox:FuzzyMatch]', { text: opt.text, value });
+                      break;
+                    }
+                  }
+                }
+
+                if (matchedOption) {
+                  console.log('🔍 [CHECKPOINT:fillForm:Combobox:FillingValue]', {
+                    fieldIdentifier,
+                    matchedValue: matchedOption.value,
+                    matchedText: matchedOption.text
+                  });
+
+                  // Try to find associated input field
+                  const input = element.querySelector('input') || element;
+
+                  // Check if this is a searchable dropdown (has input field and aria-autocomplete)
+                  const isSearchable = input.tagName === 'INPUT' &&
+                                      (element.getAttribute('aria-autocomplete') === 'list' ||
+                                       input.getAttribute('aria-autocomplete') === 'list' ||
+                                       element.getAttribute('role') === 'combobox');
+
+                  if (isSearchable) {
+                    console.log('🔍 [CHECKPOINT:fillForm:Combobox:SearchableDropdown] Using click-type-select pattern');
+
+                    // For searchable dropdowns (like Greenhouse): click → type → select
+                    try {
+                      // Step 1: Click/focus to open dropdown
+                      input.focus();
+                      input.click();
+
+                      // Wait briefly for dropdown to open
+                      await new Promise(resolve => setTimeout(resolve, 100));
+
+                      // Step 2: Type the value to filter options
+                      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                      if (nativeInputValueSetter) {
+                        nativeInputValueSetter.call(input, matchedOption.text);
+                      } else {
+                        input.value = matchedOption.text;
+                      }
+
+                      // Trigger input event to filter the dropdown
+                      input.dispatchEvent(new Event('input', { bubbles: true }));
+                      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+                      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+
+                      // Wait for filtering
+                      await new Promise(resolve => setTimeout(resolve, 200));
+
+                      // Step 3: Find and click the matching option in the dropdown
+                      const listboxId = element.getAttribute('aria-controls') || input.getAttribute('aria-controls');
+                      let listbox = listboxId ? document.getElementById(listboxId) : null;
+
+                      if (!listbox) {
+                        // Find visible listbox
+                        const visibleListboxes = Array.from(document.querySelectorAll('[role="listbox"], [role="menu"]'))
+                          .filter(lb => {
+                            const style = window.getComputedStyle(lb);
+                            return style.display !== 'none' && style.visibility !== 'hidden';
+                          });
+                        listbox = visibleListboxes[0];
+                      }
+
+                      if (listbox) {
+                        const options = listbox.querySelectorAll('[role="option"]');
+                        console.log(`🔍 [CHECKPOINT:fillForm:Combobox:FoundOptions] ${options.length} options in dropdown`);
+
+                        // Click the first matching option (should be filtered to one result)
+                        if (options.length > 0) {
+                          options[0].click();
+                          console.log('✅ [CHECKPOINT:fillForm:Combobox:ClickedOption]', options[0].textContent.trim());
+                        }
+                      }
+
+                      // Blur to close dropdown
+                      input.blur();
+
+                    } catch (error) {
+                      console.error('❌ [CHECKPOINT:fillForm:Combobox:SearchableError]', error);
+                      // Fallback to simple value set
+                      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                      if (input.tagName === 'INPUT' && nativeInputValueSetter) {
+                        nativeInputValueSetter.call(input, matchedOption.value);
+                      } else {
+                        input.value = matchedOption.value;
+                      }
+                      input.dispatchEvent(new Event('input', { bubbles: true }));
+                      input.dispatchEvent(new Event('change', { bubbles: true }));
+                      input.blur();
+                    }
+                  } else {
+                    console.log('🔍 [CHECKPOINT:fillForm:Combobox:NonSearchable] Using direct value set');
+
+                    // For non-searchable comboboxes: use native setter pattern
+                    element.focus();
+
+                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                    if (input.tagName === 'INPUT' && nativeInputValueSetter) {
+                      nativeInputValueSetter.call(input, matchedOption.value);
+                    } else {
+                      input.value = matchedOption.value;
+                    }
+
+                    // Trigger events to notify React
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    input.blur();
+                  }
+
+                  results.filled.push({ field: fieldIdentifier, type: 'combobox', value: matchedOption.value });
+                  console.log('✅ [CHECKPOINT:fillForm:Combobox:Success]', {
+                    fieldIdentifier,
+                    setValue: matchedOption.value,
+                    matchedText: matchedOption.text
+                  });
+                } else {
+                  console.warn('❌ [CHECKPOINT:fillForm:Combobox:NoMatch]', {
+                    value,
+                    availableOptions: metadata.options.slice(0, 10).map(o => o.text)
+                  });
+                  results.errors.push({ field: fieldIdentifier, error: 'Option not found' });
+                }
+              }
             } else {
-              element.value = String(value);
+              // Comprehensive event triggering for modern frameworks (React, Vue, Angular)
+              // Focus the field first
+              element.focus();
+
+              // Set the value using native setter if available (bypasses React controlled component issues)
+              try {
+                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+
+                if (element.tagName === 'TEXTAREA' && nativeTextAreaValueSetter) {
+                  nativeTextAreaValueSetter.call(element, String(value));
+                } else if (element.tagName === 'INPUT' && nativeInputValueSetter) {
+                  nativeInputValueSetter.call(element, String(value));
+                } else {
+                  element.value = String(value);
+                }
+              } catch (e) {
+                // Fallback to simple value set if native setter fails
+                element.value = String(value);
+              }
+
+              // Trigger events in the right order for React/Vue
               element.dispatchEvent(new Event('input', { bubbles: true }));
               element.dispatchEvent(new Event('change', { bubbles: true }));
+              element.dispatchEvent(new Event('blur', { bubbles: true }));
+
+              // Blur to trigger validation
+              element.blur();
+
               results.filled.push({ field: fieldIdentifier, type: fieldType, value: value });
             }
           } catch (error) {
@@ -614,13 +1108,23 @@ fillButton.addEventListener('click', async () => {
           }
         }
 
+        // Clean up navigation detector
+        window.removeEventListener('beforeunload', navigationDetector);
+        window.removeEventListener('unload', navigationDetector);
+
+        if (pageNavigated) {
+          console.error('⚠️ PAGE NAVIGATED DURING FILL - This may cause state loss and trigger rescan!');
+        }
+
         console.log('Fill results:', results);
         return results;
       },
-      args: [fillValues]
+      args: [fillValues, fieldMetadata]
     });
 
+    console.log('Fill script completed. Results:', fillResults);
     const result = fillResults[0]?.result;
+    console.log('Extracted result:', result);
 
     // Handle file uploads
     let filesUploaded = 0;
@@ -629,71 +1133,199 @@ fillButton.addEventListener('click', async () => {
     if (Object.keys(files).length > 0) {
       statusDiv.textContent = 'Uploading files...';
 
-      // Find fields that need files
+      // Detect file type from field metadata (label, name, hint)
+      function detectFileType(field) {
+        if (!field) return 'resume';
+
+        // Check label/name/hint text
+        const text = `${field.label || ''} ${field.name || ''} ${field.hint || ''}`.toLowerCase();
+
+        // Cover letter patterns
+        if (text.includes('cover') || text.includes('motivation')) {
+          return 'cover_letter';
+        }
+
+        // Resume/CV patterns (default)
+        return 'resume';
+      }
+
+      // Find fields that need files - check ALL file input fields from scannedData
       const fileFields = {};
-      for (const [fieldId, mapping] of Object.entries(fieldMappings)) {
-        if (mapping === 'RESUME_UPLOAD' && files.resume) {
-          fileFields[fieldId] = { type: 'resume', path: files.resume };
-        } else if (mapping && mapping.startsWith('COVER_LETTER_') && files.cover_letter) {
-          // Don't upload cover letter as file if it's already being used as text
-          // (cover letter upload fields would have RESUME_UPLOAD or similar mapping, not COVER_LETTER_*)
+      const usedFiles = { resume: false, cover_letter: false };
+
+      // Iterate through all scanned fields and find file inputs
+      if (scannedData.fields) {
+        for (const field of scannedData.fields) {
+          if (field.type === 'file') {
+            const fieldId = field.id || field.name;
+            if (!fieldId) continue;
+
+            // First, check backend mapping as a hint
+            const mapping = fieldMappings[fieldId];
+            let fileType = null;
+
+            if (mapping === 'RESUME_UPLOAD' && files.resume && !usedFiles.resume) {
+              fileType = 'resume';
+              usedFiles.resume = true;
+            } else {
+              // Use label detection
+              const detectedType = detectFileType(field);
+
+              if (detectedType === 'cover_letter' && files.cover_letter && !usedFiles.cover_letter) {
+                fileType = 'cover_letter';
+                usedFiles.cover_letter = true;
+              } else if (detectedType === 'resume' && files.resume && !usedFiles.resume) {
+                fileType = 'resume';
+                usedFiles.resume = true;
+              }
+            }
+
+            if (fileType) {
+              fileFields[fieldId] = { type: fileType, path: files[fileType] };
+              console.log(`Mapping file upload: field "${fieldId}" (label: "${field.label}", mapping: "${mapping}") -> ${fileType} (${files[fileType]})`);
+            }
+          }
+        }
+
+        // Second pass: if we have unused files, assign them to remaining file inputs
+        for (const field of scannedData.fields) {
+          if (field.type === 'file') {
+            const fieldId = field.id || field.name;
+            if (!fieldId || fileFields[fieldId]) continue; // Skip if already assigned
+
+            // Assign unused cover letter if available
+            if (files.cover_letter && !usedFiles.cover_letter) {
+              fileFields[fieldId] = { type: 'cover_letter', path: files.cover_letter };
+              usedFiles.cover_letter = true;
+              console.log(`Mapping file upload (second pass): field "${fieldId}" -> cover letter (${files.cover_letter})`);
+            } else if (files.resume && !usedFiles.resume) {
+              // Assign unused resume if available
+              fileFields[fieldId] = { type: 'resume', path: files.resume };
+              usedFiles.resume = true;
+              console.log(`Mapping file upload (second pass): field "${fieldId}" -> resume (${files.resume})`);
+            }
+          }
         }
       }
 
       console.log('File fields to fill:', fileFields);
+      console.log('Field mappings:', fieldMappings);
 
       // Upload files to each field
       for (const [fieldId, fileInfo] of Object.entries(fileFields)) {
         try {
           // Fetch file from server
           const fileUrl = `http://localhost:5050/api/get-file?path=${encodeURIComponent(fileInfo.path)}`;
+          console.log(`[FILE] Fetching:`, fileUrl);
+
           const response = await fetch(fileUrl);
+          console.log(`[FILE] Fetch response:`, response.status, response.ok);
 
           if (!response.ok) {
             throw new Error(`Failed to fetch file: ${response.statusText}`);
           }
 
           const blob = await response.blob();
+          console.log(`[FILE] Blob size:`, blob.size, 'type:', blob.type);
+
           const filename = fileInfo.path.split('/').pop();
           const file = new File([blob], filename, { type: blob.type });
 
-          console.log(`Attaching ${fileInfo.type} to field ${fieldId}:`, filename);
+          console.log(`[FILE] Attaching ${fileInfo.type} to field ${fieldId}:`, filename);
+          console.log(`[FILE] Injecting for field:`, fieldId, 'filename:', filename);
 
           // Inject file into the page
           await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             func: (fieldId, fileData, filename, mimeType) => {
-              // Find the file input
+              console.log(`[FILE INJECT] Starting for:`, fieldId);
+              console.log(`[FILE UPLOAD] Looking for file input with id: ${fieldId}`);
+
+              // Strategy 1: Direct lookup by ID
               let element = document.getElementById(fieldId);
-              if (!element) {
-                element = document.querySelector(`[name="${fieldId}"]`);
+              console.log(`[FILE INJECT] Found element:`, !!element, element?.type);
+              console.log(`[FILE UPLOAD] getElementById result:`, element?.tagName, element?.type);
+
+              // Strategy 2: If not found or not a file input, search more broadly
+              if (!element || element.type !== 'file') {
+                // Look for file input by name
+                const byName = document.querySelector(`input[type="file"][name="${fieldId}"]`);
+                if (byName) {
+                  console.log(`[FILE UPLOAD] Found by name attribute`);
+                  element = byName;
+                }
               }
 
-              if (!element || element.type !== 'file') {
-                console.warn(`File input not found: ${fieldId}`);
-                return { success: false, error: 'Field not found' };
+              // Strategy 3: If element found but not file input, look for nearby file input
+              if (element && element.type !== 'file') {
+                console.log(`[FILE UPLOAD] Found element but not file input, searching nearby...`);
+
+                // Look inside the element (if it's a container)
+                let fileInput = element.querySelector('input[type="file"]');
+
+                // Look in parent container
+                if (!fileInput && element.parentElement) {
+                  fileInput = element.parentElement.querySelector('input[type="file"]');
+                }
+
+                // Look in siblings
+                if (!fileInput && element.parentElement) {
+                  const siblings = Array.from(element.parentElement.children);
+                  fileInput = siblings.find(el => el.tagName === 'INPUT' && el.type === 'file');
+                }
+
+                if (fileInput) {
+                  console.log(`[FILE UPLOAD] Found actual file input nearby:`, fileInput.id || fileInput.name);
+                  element = fileInput;
+                }
               }
+
+              // Final validation
+              if (!element || element.type !== 'file') {
+                console.error(`[FILE UPLOAD] ❌ Could not find file input for: ${fieldId}`);
+                return { success: false, error: 'File input not found' };
+              }
+
+              console.log(`[FILE UPLOAD] ✓ Using file input:`, element.id || element.name, element);
 
               try {
+                console.log(`[FILE UPLOAD] Attempting to attach file to ${fieldId}:`, filename);
+
                 // Create a File object from the data
                 const blob = new Blob([new Uint8Array(fileData)], { type: mimeType });
                 const file = new File([blob], filename, { type: mimeType });
+
+                console.log(`[FILE UPLOAD] Created file object:`, { name: file.name, size: file.size, type: file.type });
 
                 // Create a DataTransfer to hold the file
                 const dataTransfer = new DataTransfer();
                 dataTransfer.items.add(file);
 
-                // Set the files property
+                console.log(`[FILE UPLOAD] DataTransfer files count:`, dataTransfer.files.length);
+
+                // Set the files property on the input element
                 element.files = dataTransfer.files;
 
-                // Trigger events
-                element.dispatchEvent(new Event('change', { bubbles: true }));
-                element.dispatchEvent(new Event('input', { bubbles: true }));
+                console.log(`[FILE INJECT] Files set, count:`, element.files.length);
+                console.log(`[FILE UPLOAD] Set element.files, count:`, element.files.length);
 
-                console.log(`File attached to ${fieldId}:`, filename);
-                return { success: true, filename };
+                // Verify file was set
+                if (element.files.length > 0) {
+                  console.log(`[FILE UPLOAD] ✅ Successfully attached file:`, element.files[0].name);
+
+                  // Dispatch change event to update React UI
+                  // This does NOT open the file picker (tested directly)
+                  // The picker was caused by clicking the "Attach" button, which we now skip
+                  element.dispatchEvent(new Event('change', { bubbles: true }));
+                  console.log(`[FILE UPLOAD] Dispatched change event`);
+
+                  return { success: true, filename: element.files[0].name };
+                } else {
+                  console.error(`[FILE UPLOAD] ❌ File not attached - element.files is empty`);
+                  return { success: false, error: 'File not attached to element' };
+                }
               } catch (error) {
-                console.error(`Error attaching file to ${fieldId}:`, error);
+                console.error(`[FILE UPLOAD] ❌ Error:`, error);
                 return { success: false, error: error.message };
               }
             },
@@ -733,8 +1365,20 @@ fillButton.addEventListener('click', async () => {
       statusDiv.className = 'status';
     }
 
+    // Verify state is still intact after fill
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('✅ FILL FORM COMPLETED');
+    console.log('State check after fill:');
+    console.log('  - scannedData still exists?', !!scannedData);
+    console.log('  - backendResponse still exists?', !!backendResponse);
+    console.log('NO backend API calls were made (only file fetches)');
+    console.log('If /api/match-fields was called, check for page navigation or state loss');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
   } catch (error) {
-    console.error('Error filling form:', error);
+    console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.error('❌ FILL FORM ERROR:', error);
+    console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     statusDiv.textContent = `Error: ${error.message}`;
     statusDiv.className = 'status error';
   } finally {

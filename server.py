@@ -5,6 +5,7 @@ Receives form field data from browser extension and returns matched/filled value
 """
 
 import json
+import re
 from pathlib import Path
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
@@ -12,7 +13,8 @@ from dotenv import load_dotenv
 import anthropic
 from anthropic.types import TextBlock
 from generate_cover_letter import run_pipeline, extract_cover_letter_text
-from utils import TokenTracker, track_api_call, PrettyLogger
+from utils.core import TokenTracker, track_api_call, PrettyLogger
+from utils.debug import debug_snapshot
 
 # Load environment variables
 load_dotenv()
@@ -218,6 +220,236 @@ def answer_specific_question(question: str, profile: dict, config: dict | None =
     return answer
 
 
+def validate_company_name(
+    url_company: str,
+    context: dict,
+    job_description: str = "",
+    config: dict | None = None
+) -> str:
+    """
+    Validate and extract accurate company name from page context.
+
+    Args:
+        url_company: Company name extracted from URL (may be ASCII slug)
+        context: Dictionary with page_title, headings, nav_links, form_labels, company_links
+        job_description: Job description text (optional, first 500 chars used)
+        config: Application configuration (will load if not provided)
+
+    Returns:
+        Validated company name (or url_company as fallback)
+    """
+    if config is None:
+        config = load_config()
+
+    with debug_snapshot("validate_company_name") as dbg:
+        # Log inputs
+        dbg.log_input(
+            url_company=url_company,
+            context=context,
+            job_description_sample=job_description[:500] if job_description else "Not available"
+        )
+
+        # If no context available, return URL company name
+        if not context:
+            print("⚠ No company name context available, using URL company name")
+            dbg.log_error(
+                error_type="NoContextError",
+                message="No company name context available"
+            )
+            dbg.log_decision(
+                result=url_company,
+                success=False,
+                reason="No context available, using URL fallback"
+            )
+            dbg.log_output(validated_name=url_company)
+            return url_company
+
+        client = anthropic.Anthropic()
+
+        # Get the model for company name extraction (use haiku for minimal cost)
+        model_name = config["task_models"].get("company_name_extraction", "haiku")
+        model_id = config["model_definitions"][model_name]["model_id"]
+
+        dbg.log_step("select_model", model_name=model_name, model_id=model_id)
+
+        # Load prompt template
+        prompt_template = load_prompt("company_name_extraction_prompt.md")
+
+        # Format context data for prompt
+        headings_text = "\n".join(context.get("headings", [])[:5]) or "None"
+        nav_links_text = "\n".join([f"- {link.get('text', '')}" for link in context.get("nav_links", [])[:10]]) or "None"
+        form_labels_text = "\n".join(context.get("form_labels", [])[:20]) or "None"
+        company_links_text = "\n".join([f"- {link.get('text', '')} ({link.get('href', '')})" for link in context.get("company_links", [])[:5]]) or "None"
+        job_description_sample = job_description[:500] if job_description else "Not available"
+
+        dbg.log_step(
+            "format_context",
+            num_headings=len(context.get("headings", [])[:5]),
+            num_nav_links=len(context.get("nav_links", [])[:10]),
+            num_form_labels=len(context.get("form_labels", [])[:20]),
+            num_company_links=len(context.get("company_links", [])[:5])
+        )
+
+        # Format the prompt
+        prompt = prompt_template.format(
+            url_company=url_company,
+            page_title=context.get("page_title", ""),
+            headings=headings_text,
+            nav_links=nav_links_text,
+            form_labels=form_labels_text,
+            company_links=company_links_text,
+            job_description_sample=job_description_sample
+        )
+
+        print(f"🔍 Validating company name (URL suggests: {url_company})...")
+
+        # Call the Anthropic API
+        response = client.messages.create(
+            model=model_id,
+            max_tokens=50,  # Company name should be very short
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        # Track API usage
+        track_api_call(tracker, "company_name_extraction", model_id, response)
+
+        # Extract text from response
+        full_text = ""
+        for block in response.content:
+            if isinstance(block, TextBlock):
+                full_text += block.text
+
+        validated_name = full_text.strip()
+
+        # Log LLM call
+        dbg.log_llm_call(
+            prompt=prompt,
+            response=validated_name,
+            model=model_id,
+            tokens_in=response.usage.input_tokens,
+            tokens_out=response.usage.output_tokens
+        )
+
+        # Fallback to URL company name if extraction failed or returned empty
+        if not validated_name or len(validated_name) > 100:
+            print(f"⚠ Company name validation failed, using URL name: {url_company}")
+            dbg.log_decision(
+                result=url_company,
+                success=False,
+                reason=f"Empty or too long (len={len(validated_name)})"
+            )
+            dbg.log_output(validated_name=url_company, fallback=True)
+            return url_company
+
+        print(f"✓ Validated company name: {validated_name}")
+        dbg.log_decision(
+            result=validated_name,
+            success=True,
+            reason="Successfully extracted from page context"
+        )
+        dbg.log_output(validated_name=validated_name, fallback=False)
+        return validated_name
+
+
+def clean_role_title(
+    raw_role_title: str,
+    company_name: str,
+    page_title: str = "",
+    config: dict | None = None
+) -> str:
+    """
+    Clean role title by removing company name prefix.
+
+    Args:
+        raw_role_title: Raw role title extracted from page (may contain company prefix)
+        company_name: Validated company name
+        page_title: Page title for additional context (optional)
+        config: Application configuration (will load if not provided)
+
+    Returns:
+        Clean role title without company prefix
+    """
+    if config is None:
+        config = load_config()
+
+    # DEBUG: Write context to file for inspection
+    debug_data = {
+        "raw_role_title": raw_role_title,
+        "company_name": company_name,
+        "page_title": page_title,
+        "timestamp": str(Path(__file__).parent)
+    }
+    debug_file = Path(__file__).parent / "debug_role_title.json"
+    with open(debug_file, "w", encoding="utf-8") as f:
+        json.dump(debug_data, f, indent=2, ensure_ascii=False)
+    print(f"🔍 DEBUG: Wrote role title context to {debug_file}")
+
+    # If no raw_role_title, return empty
+    if not raw_role_title:
+        print("⚠ No role title provided")
+        with open(debug_file, "a", encoding="utf-8") as f:
+            f.write("\n\nERROR: No role title provided\n")
+        return raw_role_title
+
+    client = anthropic.Anthropic()
+
+    # Get the model for role title cleaning (use haiku for minimal cost)
+    model_name = config["task_models"].get("role_title_cleaning", "haiku")
+    model_id = config["model_definitions"][model_name]["model_id"]
+
+    # Load prompt template
+    prompt_template = load_prompt("role_title_cleaning_prompt.md")
+
+    # Format the prompt
+    prompt = prompt_template.format(
+        raw_role_title=raw_role_title,
+        company_name=company_name,
+        page_title=page_title
+    )
+
+    # DEBUG: Write prompt to file
+    with open(debug_file, "a", encoding="utf-8") as f:
+        f.write(f"\n\n{'='*60}\nPROMPT SENT TO LLM:\n{'='*60}\n{prompt}\n")
+
+    print(f"🔍 Cleaning role title (raw: {raw_role_title})...")
+
+    # Call the Anthropic API
+    response = client.messages.create(
+        model=model_id,
+        max_tokens=50,  # Role title should be very short
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    # Track API usage
+    track_api_call(tracker, "role_title_cleaning", model_id, response)
+
+    # Extract text from response
+    full_text = ""
+    for block in response.content:
+        if isinstance(block, TextBlock):
+            full_text += block.text
+
+    cleaned_title = full_text.strip()
+
+    # DEBUG: Write LLM response to file
+    with open(debug_file, "a", encoding="utf-8") as f:
+        f.write(f"\n\n{'='*60}\nLLM RESPONSE:\n{'='*60}\n{cleaned_title}\n")
+        f.write(f"\n{'='*60}\nFINAL DECISION:\n{'='*60}\n")
+
+    # Fallback to original role title if extraction failed or returned empty
+    if not cleaned_title or len(cleaned_title) > 100:
+        print(f"⚠ Role title cleaning failed, using original: {raw_role_title}")
+        with open(debug_file, "a", encoding="utf-8") as f:
+            f.write(f"FAILED - Using original: {raw_role_title}\n")
+            f.write(f"Reason: Empty or too long (len={len(cleaned_title)})\n")
+        return raw_role_title
+
+    print(f"✓ Cleaned role title: {cleaned_title}")
+    with open(debug_file, "a", encoding="utf-8") as f:
+        f.write(f"SUCCESS - Cleaned: {cleaned_title}\n")
+    return cleaned_title
+
+
 def generate_application_content(
     cover_letter_text: str,
     why_paragraph: str,
@@ -317,6 +549,128 @@ def generate_application_content(
         return {}
 
 
+def fuzzy_match_dropdown_option(profile_value: str, options: list[str], threshold: float = 0.6) -> str | None:
+    """
+    Fuzzy match a profile value to dropdown options using token-based matching.
+
+    This provides a deterministic matching layer for common patterns without
+    overfitting to specific forms. Falls back to None if no confident match.
+
+    Args:
+        profile_value: Value from user profile (e.g., "Male", "No", "White")
+        options: List of dropdown option values to match against
+        threshold: Minimum similarity score to accept a match (0-1)
+
+    Returns:
+        Best matching option or None if no confident match
+    """
+    if not profile_value or not options:
+        return None
+
+    # Normalize profile value
+    profile_lower = profile_value.lower().strip()
+
+    # Common synonyms for demographic fields
+    synonyms = {
+        'male': ['man', 'male', 'cisgender man', 'cis man'],
+        'female': ['woman', 'female', 'cisgender woman', 'cis woman'],
+        'yes': ['yes', 'true', 'i do', 'i am'],
+        'no': ['no', 'false', 'i do not', 'i am not', 'i don\'t'],
+        'white': ['white', 'caucasian'],
+        'black': ['black', 'african american', 'african-american'],
+        'asian': ['asian', 'asian american', 'asian-american'],
+        'hispanic': ['hispanic', 'latino', 'latina', 'latinx'],
+        'straight': ['straight', 'heterosexual'],
+    }
+
+    # Check for exact match first (case-insensitive)
+    for option in options:
+        if option.lower().strip() == profile_lower:
+            return option
+
+    # Check synonym matches with scoring (find best match, not first match)
+    profile_key = profile_lower.replace(' ', '').replace('-', '')
+
+    best_score = 0.0
+    best_option = None
+
+    # First try exact key match
+    if profile_key in synonyms:
+        for option in options:
+            option_lower = option.lower().strip()
+            option_tokens = set(option_lower.split())
+
+            for variant in synonyms[profile_key]:
+                variant_tokens = set(variant.split())
+                intersection = variant_tokens & option_tokens
+
+                if intersection:
+                    # Calculate match score based on token overlap
+                    # Higher score for more tokens matching
+                    score = len(intersection) / max(len(variant_tokens), len(option_tokens))
+
+                    # Bonus for exact match
+                    if variant_tokens == option_tokens:
+                        score += 0.5
+
+                    # Bonus for key content word match (not just "cisgender")
+                    key_content_words = {'man', 'woman', 'male', 'female', 'yes', 'no', 'white', 'black', 'asian', 'hispanic'}
+                    if intersection & key_content_words:
+                        score += 0.3
+
+                    if score > best_score:
+                        best_score = score
+                        best_option = option
+
+    # If we found a good synonym match, return it
+    if best_score > 0.3:
+        return best_option
+
+    # Token-based overlap scoring with substring fallback (for non-synonym cases)
+    # Clean tokens by removing punctuation
+    profile_clean = re.sub(r'[^\w\s-]', ' ', profile_lower)
+    profile_tokens = set(profile_clean.replace('-', ' ').replace('_', ' ').split())
+
+    # Reset scoring for general matching
+    general_best_score = 0.0
+    general_best_match = None
+
+    for option in options:
+        option_lower = option.lower().strip()
+        option_clean = re.sub(r'[^\w\s-]', ' ', option_lower)
+        option_tokens = set(option_clean.replace('-', ' ').replace('_', ' ').split())
+
+        # Skip very long options (likely multi-select or complex options)
+        if len(option.split()) > 10:
+            continue
+
+        # Calculate Jaccard similarity (intersection / union)
+        if profile_tokens and option_tokens:
+            intersection = profile_tokens & option_tokens
+            union = profile_tokens | option_tokens
+            score = len(intersection) / len(union) if union else 0
+
+            # Boost score for substring matches (handles "linkedin" in "Social Media (LinkedIn, Twitter)")
+            if profile_lower in option_lower:
+                score += 0.4
+            elif option_lower in profile_lower:
+                score += 0.3
+
+            # Boost for exact token matches
+            if profile_tokens <= option_tokens:  # All profile tokens in option
+                score += 0.2
+
+            if score > general_best_score:
+                general_best_score = score
+                general_best_match = option
+
+    # Return best match if above threshold
+    if general_best_score >= threshold:
+        return general_best_match
+
+    return None
+
+
 def create_profile_summary(profile: dict) -> dict:
     """
     Create a simplified profile summary showing just the structure (keys).
@@ -336,7 +690,7 @@ def create_profile_summary(profile: dict) -> dict:
     return summary
 
 
-def map_form_fields(form_fields: list, profile: dict, config: dict | None = None) -> dict:
+def map_form_fields(form_fields: list[dict], profile: dict, config: dict | None = None) -> dict:
     """
     Map form fields to profile paths, values, or actions in one LLM call.
 
@@ -373,6 +727,10 @@ def map_form_fields(form_fields: list, profile: dict, config: dict | None = None
             "required": field.get('required', False)
         }
 
+        # Include placeholder if present (important for detecting cover letter requests)
+        if field.get('placeholder'):
+            field_data['placeholder'] = field.get('placeholder', '')
+
         # Include options for select/radio/checkbox groups
         if field.get('options'):
             field_data['options'] = field.get('options')[:10]  # Limit to first 10 options
@@ -383,12 +741,27 @@ def map_form_fields(form_fields: list, profile: dict, config: dict | None = None
     custom_answers = profile.get('custom_answers', {})
     custom_answers_text = json.dumps(custom_answers, indent=2) if custom_answers else "None"
 
+    # Generate profile structure dynamically
+    profile_structure = create_profile_summary(profile)
+    profile_structure_text = json.dumps(profile_structure, indent=2)
+
     prompt = prompt_template.format(
         form_fields=json.dumps(streamlined_fields, indent=2),
-        custom_answers=custom_answers_text
+        custom_answers=custom_answers_text,
+        profile_structure=profile_structure_text
     )
 
-    print(f"Mapping {len(form_fields)} field(s) using model: {model_id}")
+    print(f"🔍 [CHECKPOINT:map_form_fields:Entry] Mapping {len(form_fields)} fields using model: {model_id}")
+
+    # Debug: Show fields that might need cover letter
+    cover_letter_candidates = [f for f in streamlined_fields if
+                               'cover letter' in f.get('label', '').lower() or
+                               'cover letter' in f.get('placeholder', '').lower() or
+                               'additional information' in f.get('label', '').lower()]
+    if cover_letter_candidates:
+        print(f"🔍 [CHECKPOINT:map_form_fields:CoverLetterCandidates] Found {len(cover_letter_candidates)} potential cover letter fields:")
+        for f in cover_letter_candidates:
+            print(f"  - {f.get('id', 'NO_ID')}: {f.get('label', '')} (placeholder: {f.get('placeholder', 'none')})")
 
     # Call the Anthropic API
     response = client.messages.create(
@@ -406,6 +779,8 @@ def map_form_fields(form_fields: list, profile: dict, config: dict | None = None
         if isinstance(block, TextBlock):
             full_text += block.text
 
+    print(f"🔍 [CHECKPOINT:map_form_fields:LLMResponse] Received {len(full_text)} chars")
+
     # Parse JSON response (strip markdown code fences if present)
     try:
         # Remove markdown code fences if present
@@ -419,12 +794,28 @@ def map_form_fields(form_fields: list, profile: dict, config: dict | None = None
             text = text.strip()
 
         mapping = json.loads(text)
-        print(f"Field mapping complete: {len(mapping)} entries")
-        print(f"DEBUG: Field mapping keys: {list(mapping.keys())}")
+        print(f"✅ [CHECKPOINT:map_form_fields:Success] Field mapping complete: {len(mapping)} entries")
+
+        # Debug: Show how cover letter candidates were mapped
+        if cover_letter_candidates:
+            print(f"🔍 [CHECKPOINT:map_form_fields:CoverLetterMappings]")
+            for f in cover_letter_candidates:
+                field_id = f.get('id', f.get('name', 'UNKNOWN'))
+                mapped_action = mapping.get(field_id, 'NOT_MAPPED')
+                print(f"  - {field_id}: {f.get('label', '')} → {mapped_action}")
+
+        # Debug: Show all NEEDS_HUMAN fields
+        needs_human = [(k, v) for k, v in mapping.items() if v == 'NEEDS_HUMAN']
+        if needs_human:
+            print(f"🔍 [CHECKPOINT:map_form_fields:NeedsHuman] {len(needs_human)} fields marked NEEDS_HUMAN:")
+            for field_id, action in needs_human[:5]:  # Show first 5
+                field_info = next((f for f in streamlined_fields if f.get('id') == field_id), {})
+                print(f"  - {field_id}: {field_info.get('label', 'NO_LABEL')}")
+
         return mapping
     except json.JSONDecodeError as e:
-        print(f"Error parsing field mapping JSON: {e}")
-        print(f"Response text: {full_text[:200]}...")
+        print(f"❌ [CHECKPOINT:map_form_fields:ParseError] Error parsing JSON: {e}")
+        print(f"Response text: {full_text[:500]}...")
         # Return empty mapping on parse error
         return {}
 
@@ -436,7 +827,7 @@ def mapping_starts_with(mapping_value, keyword: str) -> bool:
     return isinstance(mapping_value, str) and mapping_value.startswith(keyword)
 
 
-def convert_boolean_to_option(value, field_options: list) -> str:
+def convert_boolean_to_option(value: bool, field_options: list[dict]) -> str | bool:
     """
     Convert a boolean value to match available dropdown/radio options.
 
@@ -445,7 +836,7 @@ def convert_boolean_to_option(value, field_options: list) -> str:
         field_options: List of option dicts with 'value' and 'text' keys
 
     Returns:
-        The matching option value/text, or the original value if no clear match
+        The matching option value/text (str), or the original boolean value if no clear match
     """
     if not isinstance(value, bool) or not field_options:
         return value
@@ -457,31 +848,31 @@ def convert_boolean_to_option(value, field_options: list) -> str:
     if value is True:
         # Look for "yes" variations
         if 'yes' in option_values:
-            return next(opt['value'] for opt in field_options if opt.get('value', '').lower() == 'yes')
+            return str(next(opt['value'] for opt in field_options if opt.get('value', '').lower() == 'yes'))
         if 'yes' in option_texts:
-            return next(opt['value'] for opt in field_options if opt.get('text', '').lower() == 'yes')
+            return str(next(opt['value'] for opt in field_options if opt.get('text', '').lower() == 'yes'))
         # Look for "true" variations
         if 'true' in option_values:
-            return next(opt['value'] for opt in field_options if opt.get('value', '').lower() == 'true')
+            return str(next(opt['value'] for opt in field_options if opt.get('value', '').lower() == 'true'))
         if 'true' in option_texts:
-            return next(opt['value'] for opt in field_options if opt.get('text', '').lower() == 'true')
+            return str(next(opt['value'] for opt in field_options if opt.get('text', '').lower() == 'true'))
     else:
         # Look for "no" variations
         if 'no' in option_values:
-            return next(opt['value'] for opt in field_options if opt.get('value', '').lower() == 'no')
+            return str(next(opt['value'] for opt in field_options if opt.get('value', '').lower() == 'no'))
         if 'no' in option_texts:
-            return next(opt['value'] for opt in field_options if opt.get('text', '').lower() == 'no')
+            return str(next(opt['value'] for opt in field_options if opt.get('text', '').lower() == 'no'))
         # Look for "false" variations
         if 'false' in option_values:
-            return next(opt['value'] for opt in field_options if opt.get('value', '').lower() == 'false')
+            return str(next(opt['value'] for opt in field_options if opt.get('value', '').lower() == 'false'))
         if 'false' in option_texts:
-            return next(opt['value'] for opt in field_options if opt.get('text', '').lower() == 'false')
+            return str(next(opt['value'] for opt in field_options if opt.get('text', '').lower() == 'false'))
 
     # No clear match, return original
     return value
 
 
-def resolve_profile_values(field_mapping: dict, profile: dict, fields: list = None) -> dict:
+def resolve_profile_values(field_mapping: dict, profile: dict, fields: list[dict] | None = None) -> dict:
     """
     Resolve profile paths to actual values, with smart boolean conversion for dropdowns.
 
@@ -643,15 +1034,26 @@ def get_file():
 
     requested_path = Path(file_path).resolve()
 
+    # Log the file request
+    logger.log("GET_FILE", {
+        "requested_path": file_path,
+        "resolved_path": str(requested_path),
+        "exists": requested_path.exists(),
+        "is_in_user_data": str(requested_path).startswith(str(user_data_path))
+    })
+
     # Check if requested file is within user-data directory
     try:
         requested_path.relative_to(user_data_path)
     except ValueError:
+        logger.log("GET_FILE_ERROR", {"error": "Access denied", "path": file_path})
         return jsonify({'error': 'Access denied: file outside user data directory'}), 403
 
     if not requested_path.exists():
+        logger.log("GET_FILE_ERROR", {"error": "File not found", "path": file_path})
         return jsonify({'error': 'File not found'}), 404
 
+    logger.log("GET_FILE_SUCCESS", {"path": file_path, "size": requested_path.stat().st_size})
     return send_file(requested_path, as_attachment=True)
 
 
@@ -708,9 +1110,61 @@ def match_fields():
 
         company_name = job_details.get('company_name', '')
         role_title = job_details.get('role_title', '')
+        job_location = job_details.get('job_location', '')
         job_description = job_details.get('job_description', '')
+        company_name_context = job_details.get('company_name_context')
+
+        # DEBUG: Write received job details to file
+        debug_request_file = Path(__file__).parent / "debug_request.json"
+        with open(debug_request_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "company_name": company_name,
+                "role_title": role_title,
+                "job_description_length": len(job_description) if job_description else 0,
+                "job_description_sample": job_description[:300] if job_description else "",
+                "has_company_name_context": bool(company_name_context),
+                "company_name_context": company_name_context
+            }, f, indent=2, ensure_ascii=False)
+        print(f"🔍 DEBUG: Wrote request data to {debug_request_file}")
 
         print(f"Received {len(fields)} fields and {len(actions)} actions")
+
+        # Validate company name using page context if available
+        if company_name and company_name_context:
+            # Load config early for validation (will be loaded again later if not used here)
+            validation_config = load_config()
+            validated_company_name = validate_company_name(
+                url_company=company_name,
+                context=company_name_context,
+                job_description=job_description,
+                config=validation_config
+            )
+            if validated_company_name != company_name:
+                print(f"📝 Company name updated: '{company_name}' → '{validated_company_name}'")
+                company_name = validated_company_name
+            else:
+                print(f"✓ Company name validated: {company_name}")
+        elif company_name:
+            print(f"ℹ Using URL-based company name (no context available): {company_name}")
+
+        # Clean role title to remove company prefix if present
+        if role_title and company_name:
+            # Get page title from context for additional information
+            page_title = company_name_context.get('page_title', '') if company_name_context else ''
+
+            cleaned_role_title = clean_role_title(
+                raw_role_title=role_title,
+                company_name=company_name,
+                page_title=page_title,
+                config=validation_config if 'validation_config' in locals() else None
+            )
+            if cleaned_role_title != role_title:
+                print(f"📝 Role title cleaned: '{role_title}' → '{cleaned_role_title}'")
+                role_title = cleaned_role_title
+            else:
+                print(f"✓ Role title unchanged: {role_title}")
+        elif role_title:
+            print(f"ℹ Using raw role title (no company name for cleaning): {role_title}")
 
         # DEBUG: Check which fields have options in the raw request
         fields_with_options = [f for f in fields if f.get('options')]
@@ -762,6 +1216,7 @@ def match_fields():
                 # Found resume - map it to all RESUME_UPLOAD fields
                 files['resume'] = resume_path
                 print(f"Resume found for {len(resume_fields)} field(s): {resume_path}")
+                print(f"📁 Added to files dict: resume = {resume_path}")
             else:
                 print(f"No resume found for {len(resume_fields)} RESUME_UPLOAD field(s)")
 
@@ -787,9 +1242,12 @@ def match_fields():
             if company_name and role_title:
                 try:
                     print(f"Generating cover letter for {company_name} - {role_title}...")
+                    if job_location:
+                        print(f"Using extracted job location: {job_location}")
                     result = run_pipeline(
                         company_name=company_name,
                         role_title=role_title,
+                        role_location=job_location,
                         job_description=job_description,
                         dry_run=False
                     )
@@ -800,9 +1258,12 @@ def match_fields():
                     docx_path = result['docx_path']
 
                     # Add cover letter file path (for file uploads)
-                    files['cover_letter'] = docx_path
+                    # Convert to absolute path so browser extension can fetch it
+                    absolute_path = str(Path(docx_path).resolve())
+                    files['cover_letter'] = absolute_path
 
                     print(f"Cover letter generated: {docx_path}")
+                    print(f"📁 Added to files dict: cover_letter = {absolute_path}")
                     print(f"Body text: {len(cover_letter_text)} characters")
                     print(f"Why paragraph: {len(why_paragraph)} characters")
 
@@ -845,14 +1306,66 @@ def match_fields():
                 "type": field_info.get('type', ''),
             })
 
-        # Batch generate content if we have fields to process
-        if fields_to_process and (cover_letter_text or why_paragraph):
+        # Handle cover letter fields directly WITHOUT LLM (they're already generated)
+        cover_letter_fields_handled = []
+        for field_info in fields_to_process:
+            field_id = field_info['field_id']
+            action = field_info['action']
+
+            # Check if this is a file input field - file inputs should use files dict, not fill_values
+            field_data = field_map.get(field_id, {})
+            is_file_input = field_data.get('type') == 'file'
+
+            # Direct mapping for cover letter fields - NO LLM involvement
+            if action == 'COVER_LETTER_BODY':
+                cover_letter_fields_handled.append(field_id)  # Mark as handled regardless
+                if is_file_input:
+                    # File inputs use files dict, not fill_values
+                    print(f"⏭️  Skipping COVER_LETTER_BODY for file input {field_id} (uses files dict)")
+                elif cover_letter_text:
+                    generated_content[field_id] = cover_letter_text
+                    print(f"✓ Directly assigned COVER_LETTER_BODY to {field_id} ({len(cover_letter_text)} chars)")
+                    print(f"  Preview: {cover_letter_text[:100]}...")
+                else:
+                    print(f"⚠ COVER_LETTER_BODY field {field_id} but no cover letter generated - will go to NEEDS_HUMAN")
+                # If no content, not in generated_content → will go to NEEDS_HUMAN in step 5
+
+            elif action == 'COVER_LETTER_WHY':
+                cover_letter_fields_handled.append(field_id)
+                if is_file_input:
+                    # File inputs use files dict, not fill_values
+                    print(f"⏭️  Skipping COVER_LETTER_WHY for file input {field_id} (uses files dict)")
+                elif why_paragraph:
+                    generated_content[field_id] = why_paragraph
+                    print(f"✓ Directly assigned COVER_LETTER_WHY to {field_id} ({len(why_paragraph)} chars)")
+                else:
+                    print(f"⚠ COVER_LETTER_WHY field {field_id} but no why paragraph - will go to NEEDS_HUMAN")
+
+            elif action == 'COVER_LETTER_FULL':
+                cover_letter_fields_handled.append(field_id)
+                if is_file_input:
+                    # File inputs use files dict, not fill_values
+                    print(f"⏭️  Skipping COVER_LETTER_FULL for file input {field_id} (uses files dict)")
+                elif cover_letter_text:
+                    # For FULL, we'd need to read the actual .docx with header
+                    # For now, use body + header info from profile
+                    full_letter = cover_letter_text  # Could enhance this later
+                    generated_content[field_id] = full_letter
+                    print(f"✓ Directly assigned COVER_LETTER_FULL to {field_id}")
+                else:
+                    print(f"⚠ COVER_LETTER_FULL field {field_id} but no cover letter - will go to NEEDS_HUMAN")
+
+        # Filter out cover letter fields from LLM processing (never send to LLM)
+        llm_fields = [f for f in fields_to_process if f['field_id'] not in cover_letter_fields_handled]
+
+        # Batch generate content for remaining fields (GENERATE_ANSWER only)
+        if llm_fields:
             try:
-                print(f"Generating content for {len(fields_to_process)} field(s)...")
+                print(f"Generating content for {len(llm_fields)} field(s) using LLM...")
                 batch_answers = generate_application_content(
                     cover_letter_text=cover_letter_text,
                     why_paragraph=why_paragraph,
-                    fields_to_process=fields_to_process,
+                    fields_to_process=llm_fields,
                     field_mapping=field_mapping,
                     profile=profile,
                     config=config
@@ -863,7 +1376,7 @@ def match_fields():
                     # Check if answer is NEEDS_HUMAN
                     if answer and not answer.startswith("NEEDS_HUMAN"):
                         generated_content[field_id] = answer
-                        print(f"Added content for {field_id}: {answer[:50]}...")
+                        print(f"Added LLM-generated content for {field_id}: {answer[:50]}...")
                     else:
                         print(f"Field {field_id} needs human input")
 
@@ -931,6 +1444,14 @@ def match_fields():
 
         print(f"Processing complete: {len(fill_values)} auto-filled, {len(needs_human)} need human, {len(files)} files")
 
+        # Debug: Log files dict contents
+        if files:
+            print(f"📁 Files dict contents:")
+            for file_type, file_path in files.items():
+                print(f"  {file_type}: {file_path}")
+        else:
+            print(f"⚠️  Files dict is empty")
+
         # Print token usage summary
         tracker.print_summary()
         total = tracker.get_session_total()
@@ -985,6 +1506,16 @@ def token_usage():
         'session_total': session_total,
         'by_task': list(summary.values())
     }), 200
+
+
+@app.route('/api/console-log', methods=['POST', 'OPTIONS'])
+def console_log():
+    """Receive console logs from browser extension for debugging."""
+    if request.method == 'OPTIONS':
+        return '', 204
+    data = request.json
+    logger.log(f"BROWSER_{data['level'].upper()}", data['message'])
+    return jsonify({"ok": True})
 
 
 @app.route('/api/test', methods=['GET', 'POST', 'OPTIONS'])

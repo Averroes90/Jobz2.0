@@ -25,8 +25,7 @@ from urllib import response
 import anthropic
 from anthropic.types import TextBlock
 from dotenv import load_dotenv
-from utils import TokenTracker, track_api_call
-from utils.cache import ResearchCache
+from utils.core import TokenTracker, track_api_call, ResearchCache
 
 # Load environment variables from .env file
 load_dotenv()
@@ -227,6 +226,31 @@ def get_company_address(
         match = re.search(r"ADDRESS_LINE2:\s*(.+?)(?:\n|$)", full_text)
         if match:
             result["address_line2"] = match.group(1).strip()
+
+    # Validate and fix format: LINE1 should be street only, LINE2 should have city/state/zip
+    # If LINE1 has a city name and LINE2 is missing city, fix it
+    line1 = result["address_line1"]
+    line2 = result["address_line2"]
+
+    print(f"🔍 [CHECKPOINT:address_lookup:RawParsed] LINE1='{line1}' | LINE2='{line2}'")
+
+    # Check if LINE2 starts with just a state abbreviation (2 uppercase letters)
+    # This indicates the city is in LINE1 when it should be in LINE2
+    if line2 and re.match(r'^[A-Z]{2}\s+\d{5}', line2):
+        # LINE2 is just "CA 94065" or similar - city is missing
+        print(f"🔍 [CHECKPOINT:address_lookup:DetectedMisformat] LINE2 starts with state code")
+        # Try to extract city from end of LINE1
+        # Look for pattern: "street address, City Name" in LINE1
+        match = re.search(r'^(.+?),\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)$', line1)
+        if match:
+            street = match.group(1).strip()
+            city = match.group(2).strip()
+            result["address_line1"] = street
+            result["address_line2"] = f"{city}, {line2}"
+            print(f"✅ [CHECKPOINT:address_lookup:FixedFormat] Moved '{city}' from LINE1 to LINE2")
+            print(f"   New: LINE1='{street}' | LINE2='{city}, {line2}'")
+        else:
+            print(f"❌ [CHECKPOINT:address_lookup:FixFailed] Could not extract city from LINE1")
 
     return result
 
@@ -557,9 +581,9 @@ def create_cover_letter(
         for placeholder, value in replacements.items():
             content = content.replace(placeholder, value)
 
-        # Note: We keep the ---BODY--- marker in the document so that
-        # extract_cover_letter_text() can use it to identify where the body starts.
-        # The marker is removed from the extracted text, not the DOCX file.
+        # Remove the ---BODY--- marker from the final document
+        # (It was only needed as a placeholder in the template)
+        content = content.replace("---BODY---", "")
 
         if dry_run:
             print("\n--- DRY RUN: Would create document with these values ---")
@@ -775,6 +799,7 @@ def run_pipeline(
     try:
         body_text = extract_cover_letter_text(str(output_path))
         print(f"✓ Extracted {len(body_text)} characters of body text")
+        print(f"🔍 [CHECKPOINT:run_pipeline:BodyTextStart] {body_text[:200]}...")
     except Exception as e:
         print(f"Warning: Could not extract body text: {e}")
         body_text = final_paragraph  # Fallback to just the paragraph

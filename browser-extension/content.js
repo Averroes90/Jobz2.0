@@ -1,62 +1,121 @@
 // Content script to scan form fields on the page
-(function() {
-  console.log('Form scanner content script running');
+(async function() {
+  const EXTENSION_VERSION = 'v2.0-20260116-2100';
+  console.log('🔧 Form scanner content script running:', EXTENSION_VERSION);
+
+  /**
+   * Send console logs to backend for debugging
+   */
+  function logToBackend(level, message) {
+    fetch('http://localhost:5050/api/console-log', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({level, message, timestamp: new Date().toISOString()})
+    }).catch(() => {});
+  }
 
   /**
    * Get label text for a form field
    * Checks multiple sources: associated label, aria-label, placeholder
    */
   function getFieldLabel(element) {
-    // Try associated <label> element via for/id
+    const candidates = [];
+
+    // 1. Check button group labels (for file inputs)
+    if (element.type === 'file') {
+      const buttonGroup = element.closest('[role="group"], .file-upload, .button-container');
+      if (buttonGroup) {
+        // Check aria-labelledby on button group
+        const labelledBy = buttonGroup.getAttribute('aria-labelledby');
+        if (labelledBy) {
+          const labelElement = document.getElementById(labelledBy);
+          if (labelElement && labelElement.textContent.trim()) {
+            candidates.push(labelElement.textContent.trim());
+          }
+        }
+
+        // Check for label elements inside button group
+        const groupLabels = buttonGroup.querySelectorAll('.label, .upload-label, [class*="label"]');
+        groupLabels.forEach(label => {
+          const text = label.textContent.trim();
+          if (text) candidates.push(text);
+        });
+      }
+    }
+
+    // 2. Check label[for] element
     if (element.id) {
       const label = document.querySelector(`label[for="${element.id}"]`);
       if (label && label.textContent.trim()) {
-        return label.textContent.trim();
+        candidates.push(label.textContent.trim());
       }
     }
 
-    // Try parent label (field nested inside label)
+    // 3. Check parent label (field nested inside label)
     const parentLabel = element.closest('label');
     if (parentLabel && parentLabel.textContent.trim()) {
-      // Remove the element's own value from the label text
       let labelText = parentLabel.textContent.trim();
+      // Remove element's own value from label text
       if (element.value) {
         labelText = labelText.replace(element.value, '').trim();
       }
-      return labelText;
+      if (labelText) candidates.push(labelText);
     }
 
-    // Try aria-label attribute
+    // 4. Check aria-label attribute
     if (element.getAttribute('aria-label')) {
-      return element.getAttribute('aria-label').trim();
+      candidates.push(element.getAttribute('aria-label').trim());
     }
 
-    // Try aria-labelledby
+    // 5. Check aria-labelledby on element itself
     if (element.getAttribute('aria-labelledby')) {
       const labelId = element.getAttribute('aria-labelledby');
       const labelElement = document.getElementById(labelId);
       if (labelElement && labelElement.textContent.trim()) {
-        return labelElement.textContent.trim();
+        candidates.push(labelElement.textContent.trim());
       }
     }
 
-    // Try placeholder as last resort
+    // 6. Check placeholder
     if (element.placeholder) {
-      return `[Placeholder: ${element.placeholder}]`;
+      candidates.push(element.placeholder);
     }
 
-    // Try name attribute
+    // 7. Check name attribute
     if (element.name) {
-      return `[Name: ${element.name}]`;
+      candidates.push(element.name);
     }
 
-    return '[No label]';
+    // Filter out empty, very short, or generic labels
+    const genericWords = ['attach', 'upload', 'enter', 'select', 'choose', 'pick', 'file'];
+    const filtered = candidates.filter(c => {
+      if (!c || c.length < 3) return false;
+      const lower = c.toLowerCase();
+      // Keep it if it's not a single generic word
+      return !genericWords.includes(lower);
+    });
+
+    // Return longest (most specific) label
+    if (filtered.length > 0) {
+      const longest = filtered.sort((a, b) => b.length - a.length)[0];
+      console.log(`[getFieldLabel] Selected "${longest}" from candidates:`, candidates);
+      return longest;
+    }
+
+    // Fallback to any candidate or [No label]
+    return candidates[0] || '[No label]';
   }
 
   /**
    * Get the field type
    */
   function getFieldType(element) {
+    // Check for ARIA role first
+    const role = element.getAttribute('role');
+    if (role === 'combobox' || role === 'listbox') {
+      return 'combobox';
+    }
+
     if (element.tagName === 'SELECT') {
       return 'select';
     }
@@ -214,6 +273,12 @@
    * Get the input type for better categorization
    */
   function getInputType(element) {
+    // Check for ARIA role first
+    const role = element.getAttribute('role');
+    if (role === 'combobox' || role === 'listbox') {
+      return 'combobox';
+    }
+
     if (element.tagName === 'SELECT') {
       return 'select';
     }
@@ -255,7 +320,13 @@
    * Try to find options for Greenhouse/custom dropdown fields
    * Greenhouse often uses custom dropdowns that aren't standard <select> elements
    */
-  function extractCustomDropdownOptions(element) {
+  /**
+   * Extract dropdown options synchronously (Strategies 1-4 only)
+   */
+  function extractCustomDropdownOptionsSync(element) {
+    const elementId = element.id || element.name || 'unknown';
+    console.log(`[extractCustomDropdownOptionsSync] Checking element: ${elementId}`);
+
     // Strategy 1: Look for a select element with matching name or ID
     if (element.name || element.id) {
       // Try finding by exact name match
@@ -263,7 +334,10 @@
         const selectByName = document.querySelector(`select[name="${element.name}"]`);
         if (selectByName && selectByName !== element) {
           const opts = extractSelectOptions(selectByName);
-          if (opts.length > 0) return opts;
+          if (opts.length > 0) {
+            console.log(`[Strategy 1] Found ${opts.length} options for ${elementId} via name match`);
+            return opts;
+          }
         }
       }
 
@@ -272,41 +346,17 @@
         const selectById = document.querySelector(`select[id="${element.id}"], select[id="${element.id}_select"], select[data-for="${element.id}"]`);
         if (selectById && selectById !== element) {
           const opts = extractSelectOptions(selectById);
-          if (opts.length > 0) return opts;
+          if (opts.length > 0) {
+            console.log(`[Strategy 1] Found ${opts.length} options for ${elementId} via ID match`);
+            return opts;
+          }
         }
       }
     }
 
-    // Strategy 2: Look for a hidden select element nearby (common pattern)
-    const parent = element.parentElement;
-    if (parent) {
-      // Check for sibling select
-      const siblingSelect = parent.querySelector('select');
-      if (siblingSelect && siblingSelect !== element) {
-        const opts = extractSelectOptions(siblingSelect);
-        if (opts.length > 0) return opts;
-      }
-
-      // Check for select in parent's parent (nested wrapper)
-      const grandparent = parent.parentElement;
-      if (grandparent) {
-        const selectInGrandparent = grandparent.querySelector('select');
-        if (selectInGrandparent && selectInGrandparent !== element) {
-          const opts = extractSelectOptions(selectInGrandparent);
-          if (opts.length > 0) return opts;
-        }
-      }
-
-      // Check great-grandparent too (deeply nested)
-      const greatGrandparent = grandparent ? grandparent.parentElement : null;
-      if (greatGrandparent) {
-        const selectInGreatGrandparent = greatGrandparent.querySelector('select');
-        if (selectInGreatGrandparent && selectInGreatGrandparent !== element) {
-          const opts = extractSelectOptions(selectInGreatGrandparent);
-          if (opts.length > 0) return opts;
-        }
-      }
-    }
+    // Strategy 2: DISABLED - Too unreliable, matches unrelated select elements
+    // (Was matching phone country selector for all fields)
+    // If you need this, use Strategy 1 (explicit ID/name matching) or Strategy 3 (aria-controls)
 
     // Strategy 3: Look for aria-controls (points to option list)
     const controlsId = element.getAttribute('aria-controls');
@@ -363,8 +413,13 @@
       }
     }
 
-    // Strategy 5: Heuristic fallback - infer Yes/No options for likely boolean questions
-    // This handles cases where Greenhouse loads options dynamically
+    return null;
+  }
+
+  /**
+   * Infer Yes/No options for boolean-looking questions
+   */
+  function inferYesNoOptions(element) {
     const label = getFieldLabel(element).toLowerCase();
     const hint = getFieldHint(element).toLowerCase();
     const combinedText = `${label} ${hint}`;
@@ -406,9 +461,240 @@
   }
 
   /**
+   * Extract dropdown options with runtime triggering (async)
+   * Triggers ALL comboboxes to extract their options during scan
+   */
+  async function extractCustomDropdownOptions(element) {
+    console.log(`[SCAN] Extracting options for ${element.id || element.name}...`);
+
+    // Try sync extraction first (Strategies 1-4)
+    let options = extractCustomDropdownOptionsSync(element);
+
+    // If we found real options from sync extraction, return them
+    if (options && options.length > 2) {
+      console.log(`[SCAN] Found ${options.length} options via sync extraction for ${element.id || element.name}`);
+      return options;
+    }
+
+    // For ALL comboboxes, trigger dropdown to extract options
+    const isCombobox = element.getAttribute('role') === 'combobox' ||
+                      element.getAttribute('aria-haspopup') === 'listbox' ||
+                      element.getAttribute('aria-autocomplete') === 'list';
+
+    if (isCombobox) {
+      console.log(`[SCAN] ======== Triggering combobox: ${element.id || element.name} ========`);
+
+      try {
+        // STEP 1: Close ALL existing dropdowns before opening this one
+        console.log(`[SCAN] Closing all existing dropdowns...`);
+        const allListboxes = document.querySelectorAll('[role="listbox"], [role="menu"], [role="dialog"]');
+        allListboxes.forEach(lb => {
+          lb.style.display = 'none';
+          lb.style.visibility = 'hidden';
+          lb.setAttribute('aria-hidden', 'true');
+        });
+
+        // Snapshot visible listboxes BEFORE clicking
+        const listboxesBeforeClick = Array.from(document.querySelectorAll('[role="listbox"], [role="menu"]'))
+          .filter(lb => {
+            const style = window.getComputedStyle(lb);
+            return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+          });
+        console.log(`[SCAN] Visible listboxes BEFORE click: ${listboxesBeforeClick.length}`);
+
+        // STEP 2: Aggressively trigger dropdown to open
+        console.log(`[SCAN] Triggering dropdown with multiple methods...`);
+
+        // Focus first
+        element.focus();
+        await new Promise(resolve => setTimeout(resolve, 200));
+
+        // Mouse events
+        element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+
+        // Click
+        element.click();
+
+        // Set ARIA expanded
+        element.setAttribute('aria-expanded', 'true');
+
+        // Wait LONGER for dropdown to load and render
+        console.log(`[SCAN] Waiting 1000ms for dropdown to appear...`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // STEP 3: Find the listbox that opened
+        console.log(`[SCAN] Looking for opened listbox...`);
+
+        // Look for listbox via aria-controls
+        const controlsId = element.getAttribute('aria-controls');
+        let listbox = null;
+
+        if (controlsId) {
+          listbox = document.getElementById(controlsId);
+          if (listbox) {
+            console.log(`[SCAN] ✓ Found listbox via aria-controls: ${controlsId}`);
+          }
+        }
+
+        // If not found, find NEW visible listboxes that appeared AFTER clicking
+        if (!listbox) {
+          const listboxesAfterClick = Array.from(document.querySelectorAll('[role="listbox"], [role="menu"]'))
+            .filter(lb => {
+              const style = window.getComputedStyle(lb);
+              const isVisible = style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+              if (isVisible) {
+                console.log(`[SCAN] Found visible listbox:`, lb.id || lb.className, {
+                  display: style.display,
+                  visibility: style.visibility,
+                  opacity: style.opacity
+                });
+              }
+              return isVisible;
+            });
+
+          // Find listboxes that are new (weren't visible before)
+          const newListboxes = listboxesAfterClick.filter(lb => !listboxesBeforeClick.includes(lb));
+
+          console.log(`[SCAN] Visible listboxes AFTER click: ${listboxesAfterClick.length}, NEW: ${newListboxes.length}`);
+
+          if (newListboxes.length === 1) {
+            listbox = newListboxes[0];
+            console.log(`[SCAN] ✓ Using newly appeared listbox:`, listbox.id || listbox.className);
+          } else if (newListboxes.length > 1) {
+            // Multiple new listboxes - find the closest one spatially
+            console.log(`[SCAN] Multiple new listboxes, finding closest...`);
+            const elementRect = element.getBoundingClientRect();
+            let closestListbox = null;
+            let minDistance = Infinity;
+
+            for (const lb of newListboxes) {
+              const lbRect = lb.getBoundingClientRect();
+              const distance = Math.abs(lbRect.top - elementRect.bottom);
+              console.log(`[SCAN] Listbox ${lb.id || lb.className} distance:`, distance);
+              if (distance < minDistance && distance < 300) { // Max 300px away
+                minDistance = distance;
+                closestListbox = lb;
+              }
+            }
+
+            if (closestListbox) {
+              listbox = closestListbox;
+              console.log(`[SCAN] ✓ Using closest new listbox (distance: ${minDistance}px):`, listbox.id || listbox.className);
+            }
+          } else if (newListboxes.length === 0 && listboxesAfterClick.length > 0) {
+            // No NEW listboxes, but there are visible ones - might be same dropdown reopening
+            console.log(`[SCAN] No new listboxes, checking existing visible ones...`);
+            const elementRect = element.getBoundingClientRect();
+            for (const lb of listboxesAfterClick) {
+              const lbRect = lb.getBoundingClientRect();
+              const distance = Math.abs(lbRect.top - elementRect.bottom);
+              if (distance < 300) {
+                listbox = lb;
+                console.log(`[SCAN] ✓ Using nearby existing listbox (distance: ${distance}px):`, listbox.id || listbox.className);
+                break;
+              }
+            }
+          }
+        }
+
+        // STEP 4: Extract options from listbox
+        if (listbox) {
+          const optionElements = listbox.querySelectorAll('[role="option"], li, .option, [data-value]');
+          console.log(`[SCAN] Found ${optionElements.length} option elements in listbox`);
+
+          if (optionElements.length > 0) {
+            const extractedOptions = [];
+            const limit = Math.min(optionElements.length, 100); // Increased limit
+
+            for (let i = 0; i < limit; i++) {
+              const opt = optionElements[i];
+              const text = opt.textContent.trim();
+              const value = opt.getAttribute('data-value') ||
+                           opt.getAttribute('value') ||
+                           text;
+
+              if (text && text !== '') {
+                extractedOptions.push({ value, text });
+              }
+            }
+
+            if (extractedOptions.length > 0) {
+              console.log(`[SCAN] ✓✓✓ Successfully extracted ${extractedOptions.length} options for ${element.id || element.name}`);
+              console.log(`[SCAN] First 5 options:`, extractedOptions.slice(0, 5).map(o => o.text));
+              options = extractedOptions;
+            } else {
+              console.warn(`[SCAN] ⚠️ Found option elements but none had text`);
+            }
+          } else {
+            console.warn(`[SCAN] ⚠️ Listbox found but has no option elements`);
+          }
+        } else {
+          console.error(`[SCAN] ❌ No listbox found for ${element.id || element.name}`);
+        }
+
+        // STEP 5: Close dropdown definitively
+        console.log(`[SCAN] ======== Closing dropdown for ${element.id || element.name} ========`);
+
+        // Method 1: If we found the listbox, forcibly hide it
+        if (listbox) {
+          console.log(`[SCAN] Hiding listbox directly...`);
+          listbox.style.display = 'none';
+          listbox.style.visibility = 'hidden';
+          listbox.style.opacity = '0';
+          listbox.setAttribute('aria-hidden', 'true');
+        }
+
+        // Method 2: Set aria-expanded to false on element
+        if (element.getAttribute('aria-expanded') === 'true') {
+          element.setAttribute('aria-expanded', 'false');
+          console.log(`[SCAN] Set aria-expanded=false`);
+        }
+
+        // Method 3: Send Escape key
+        element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+        element.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+
+        // Method 4: Blur the element
+        element.blur();
+
+        // Method 5: Click body to close any modal overlays
+        document.body.click();
+
+        // Wait for dropdown to fully close
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // STEP 6: Verify closure
+        const stillVisible = Array.from(document.querySelectorAll('[role="listbox"], [role="menu"]'))
+          .filter(lb => {
+            const style = window.getComputedStyle(lb);
+            return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+          });
+
+        if (stillVisible.length > 0) {
+          console.warn(`[SCAN] ⚠️ ${stillVisible.length} listbox(es) still visible after closing!`);
+          // Force close them
+          stillVisible.forEach(lb => {
+            lb.style.display = 'none';
+            lb.style.visibility = 'hidden';
+            lb.setAttribute('aria-hidden', 'true');
+          });
+        } else {
+          console.log(`[SCAN] ✓ All dropdowns closed successfully`);
+        }
+
+      } catch (error) {
+        console.warn(`[SCAN] Error extracting options for ${element.id || element.name}:`, error);
+      }
+    }
+
+    return options;
+  }
+
+  /**
    * Extract information from a form field
    */
-  function extractFieldInfo(element, options = null) {
+  async function extractFieldInfo(element, options = null) {
     const fieldInfo = {
       label: getFieldLabel(element),
       hint: getFieldHint(element),
@@ -422,17 +708,82 @@
       autocomplete: element.getAttribute('autocomplete') || ''
     };
 
+    // Generate ID from label if element has no ID
+    if (!fieldInfo.id) {
+      console.log('🔍 [CHECKPOINT:extractFieldInfo:NoID]', {
+        type: fieldInfo.input_type,
+        label: fieldInfo.label,
+        name: fieldInfo.name,
+        placeholder: fieldInfo.placeholder
+      });
+
+      let generatedId = '';
+      let idSource = '';
+
+      // Try to generate from label
+      if (fieldInfo.label) {
+        generatedId = fieldInfo.label
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_')
+          .replace(/^_+|_+$/g, '')
+          .substring(0, 50);
+        idSource = 'label';
+        console.log('🔍 [CHECKPOINT:extractFieldInfo:IDFromLabel]', { label: fieldInfo.label, generated: generatedId });
+      }
+      // Fallback to name
+      else if (fieldInfo.name) {
+        generatedId = fieldInfo.name;
+        idSource = 'name';
+        console.log('🔍 [CHECKPOINT:extractFieldInfo:IDFromName]', { name: fieldInfo.name, generated: generatedId });
+      }
+      // Last resort: use placeholder
+      else if (fieldInfo.placeholder) {
+        generatedId = fieldInfo.placeholder
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_')
+          .replace(/^_+|_+$/g, '')
+          .substring(0, 50);
+        idSource = 'placeholder';
+        console.log('🔍 [CHECKPOINT:extractFieldInfo:IDFromPlaceholder]', { placeholder: fieldInfo.placeholder, generated: generatedId });
+      }
+
+      // Prefix with input type for clarity
+      if (generatedId) {
+        const prefix = fieldInfo.input_type === 'combobox' ? 'combobox_' :
+                      fieldInfo.input_type === 'custom_select' ? 'custom_select_' :
+                      'field_';
+        fieldInfo.id = prefix + generatedId;
+
+        // Actually set the ID on the DOM element so it can be found later
+        element.setAttribute('id', fieldInfo.id);
+        console.log('✅ [CHECKPOINT:extractFieldInfo:IDGenerated]', {
+          finalId: fieldInfo.id,
+          source: idSource,
+          prefix: prefix,
+          elementSet: element.id === fieldInfo.id
+        });
+      } else {
+        console.log('❌ [CHECKPOINT:extractFieldInfo:IDGenerationFailed] No label, name, or placeholder available');
+      }
+    }
+
     // Add options for select elements
     if (element.tagName === 'SELECT') {
       fieldInfo.options = extractSelectOptions(element);
     }
-    // Try to detect custom dropdown options for text inputs (e.g., Greenhouse)
-    else if (element.tagName === 'INPUT' && (element.type === 'text' || !element.type)) {
-      const customOptions = extractCustomDropdownOptions(element);
+    // Try to detect custom dropdown options ONLY for actual comboboxes (e.g., Greenhouse)
+    // DO NOT extract options for plain text inputs - they'll get matched by nearby select elements
+    else if (element.getAttribute('role') === 'combobox' ||
+             element.getAttribute('aria-haspopup') === 'listbox' ||
+             element.getAttribute('aria-autocomplete') === 'list') {
+      console.log(`[SCAN] Detected combobox: ${element.id || element.name} (role=${element.getAttribute('role')}, aria-haspopup=${element.getAttribute('aria-haspopup')})`);
+      const customOptions = await extractCustomDropdownOptions(element);
       if (customOptions && customOptions.length > 0) {
-        console.log(`Found custom dropdown options for ${element.id || element.name}:`, customOptions);
+        console.log(`[SCAN] ✓ Stored ${customOptions.length} options for ${element.id || element.name}`);
         fieldInfo.options = customOptions;
         fieldInfo.input_type = 'custom_select';  // Mark as custom select for backend
+      } else {
+        console.log(`[SCAN] ✗ No options extracted for combobox ${element.id || element.name}`);
       }
     }
 
@@ -511,27 +862,256 @@
   /**
    * Find all form fields on the page
    */
-  function scanFormFields() {
-    // Find all input, select, and textarea elements
-    const inputs = document.querySelectorAll('input, select, textarea');
+  /**
+   * Detect button-based form fields (common in modern UIs)
+   * These are groups of buttons/divs that act as selectable options
+   */
+  function detectButtonFields() {
+    const buttonFields = [];
+
+    console.log('=== BUTTON FIELD DETECTION DEBUG ===');
+
+    // Look for common patterns:
+    // 1. Multiple buttons within a container that share aria-labelledby or data attributes
+    // 2. Buttons with role="radio" or similar
+    // 3. Clickable divs/buttons grouped together
+
+    // Pattern 1: Find containers with multiple button-like children
+    const containers = document.querySelectorAll([
+      '[role="radiogroup"]',
+      '[role="group"]',
+      '.button-group',
+      '.radio-group',
+      '.options-group',
+      '[class*="question"]',
+      '[class*="field"]',
+      '[class*="input"]',
+      '[data-field]',
+      'fieldset'
+    ].join(', '));
+
+    console.log(`Found ${containers.length} potential button field containers`);
+
+    containers.forEach((container, idx) => {
+      console.log(`\nContainer ${idx}:`, {
+        tagName: container.tagName,
+        classes: container.className,
+        id: container.id,
+        role: container.getAttribute('role'),
+        innerHTML: container.innerHTML.substring(0, 200) + '...' // Preview HTML
+      });
+
+      // Try multiple selectors to find button-like elements
+      let buttons = container.querySelectorAll('button:not([type="submit"]):not([type="button"][class*="next"]):not([class*="back"]), [role="radio"], [role="button"]:not([class*="submit"]):not([class*="next"]):not([class*="back"])');
+
+      console.log(`  Selector 1 (standard buttons): ${buttons.length} found`);
+
+      // If no buttons found, try more generic selectors (Ashby often uses divs)
+      if (buttons.length === 0) {
+        buttons = container.querySelectorAll('div[role="button"], div[tabindex], span[role="button"], [class*="option"]:not(select option), [class*="choice"], [data-option], [class*="button"]:not(button[type="submit"])');
+        console.log(`  Selector 2 (divs/spans): ${buttons.length} found before filtering`);
+
+        // Filter to only visible, clickable elements
+        const originalCount = buttons.length;
+        buttons = Array.from(buttons).filter(btn => {
+          const style = window.getComputedStyle(btn);
+          return style.display !== 'none' &&
+                 style.visibility !== 'hidden' &&
+                 btn.offsetParent !== null &&
+                 (btn.onclick || btn.getAttribute('role') === 'button' || btn.tabIndex >= 0);
+        });
+        console.log(`  After filtering: ${buttons.length} (removed ${originalCount - buttons.length} hidden/non-clickable)`);
+      }
+
+      // If still nothing, try looking for ANY direct children that might be options
+      if (buttons.length === 0) {
+        const directChildren = Array.from(container.children);
+        buttons = directChildren.filter(child => {
+          const text = child.textContent.trim();
+          const hasShortText = text.length > 0 && text.length < 30;
+          const hasClickHandler = child.onclick ||
+                                 child.getAttribute('onclick') ||
+                                 child.style.cursor === 'pointer' ||
+                                 child.classList.toString().match(/clickable|button|option|choice/i);
+          return hasShortText && (hasClickHandler || child.getAttribute('role'));
+        });
+        console.log(`  Selector 3 (direct children): ${buttons.length} found`);
+      }
+
+      console.log(`  Total buttons found: ${buttons.length}`);
+
+      if (buttons.length >= 2 && buttons.length <= 10) { // Reasonable range for options
+        // Check if these look like option buttons (similar styling, short text)
+        const buttonTexts = Array.from(buttons).map(b => b.textContent.trim());
+        const avgLength = buttonTexts.reduce((sum, t) => sum + t.length, 0) / buttonTexts.length;
+
+        console.log(`  Button texts:`, buttonTexts);
+        console.log(`  Average text length: ${avgLength}`);
+
+        // If buttons have short text (likely options not actions), treat as field
+        if (avgLength < 30) {
+          // Find the label/question
+          let label = '';
+
+          // Try aria-labelledby
+          const labelledBy = container.getAttribute('aria-labelledby');
+          if (labelledBy) {
+            const labelElement = document.getElementById(labelledBy);
+            if (labelElement) label = labelElement.textContent.trim();
+          }
+
+          // Try label, legend, or preceding heading
+          if (!label) {
+            const labelElement = container.querySelector('label, legend');
+            if (labelElement) label = labelElement.textContent.trim();
+          }
+
+          if (!label) {
+            const heading = container.querySelector('h1, h2, h3, h4, h5, h6, [class*="question"], [class*="label"]');
+            if (heading) label = heading.textContent.trim();
+          }
+
+          // Look for label as previous sibling
+          if (!label && container.previousElementSibling) {
+            const prev = container.previousElementSibling;
+            if (prev.tagName.match(/^H[1-6]$/) || prev.classList.toString().match(/label|question/i)) {
+              label = prev.textContent.trim();
+            }
+          }
+
+          // Generate field ID from container or first button
+          let fieldId = container.id ||
+                       container.getAttribute('data-field-id') ||
+                       container.getAttribute('data-question-id') ||
+                       buttons[0].id ||
+                       buttons[0].getAttribute('name') ||
+                       '';
+
+          console.log('🔍 [CHECKPOINT:detectButtonFields:IDLookup]', {
+            containerId: container.id,
+            dataFieldId: container.getAttribute('data-field-id'),
+            firstButtonId: buttons[0].id,
+            foundId: fieldId,
+            label: label
+          });
+
+          // If no ID, generate one from the label
+          if (!fieldId && label) {
+            const rawGenerated = label
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, '_')
+              .replace(/^_+|_+$/g, '')
+              .substring(0, 50);
+
+            fieldId = 'button_group_' + rawGenerated;
+
+            console.log('🔍 [CHECKPOINT:detectButtonFields:GeneratingID]', {
+              label: label,
+              rawGenerated: rawGenerated,
+              finalId: fieldId
+            });
+
+            // Set the generated ID on the container element so it can be found later
+            container.setAttribute('id', fieldId);
+            const verifySet = container.id === fieldId;
+
+            console.log('✅ [CHECKPOINT:detectButtonFields:IDSetOnDOM]', {
+              fieldId: fieldId,
+              elementIdAfterSet: container.id,
+              successfullySet: verifySet
+            });
+          }
+
+          if (label || fieldId) {
+            console.log(`  ✓ Creating button field:`, { id: fieldId, label, optionCount: buttons.length });
+
+            buttonFields.push({
+              id: fieldId,
+              name: container.getAttribute('name') || fieldId,
+              label: label || '[Button group]',
+              type: 'button_group',
+              input_type: 'button_group',
+              required: container.getAttribute('aria-required') === 'true' ||
+                       container.hasAttribute('required') ||
+                       label.includes('*'),
+              value: '',
+              options: Array.from(buttons).map(btn => ({
+                value: btn.getAttribute('value') ||
+                       btn.getAttribute('data-value') ||
+                       btn.textContent.trim(),
+                text: btn.textContent.trim(),
+                selected: btn.getAttribute('aria-checked') === 'true' ||
+                         btn.classList.contains('selected') ||
+                         btn.classList.contains('active')
+              })),
+              hint: container.getAttribute('aria-describedby') ?
+                   document.getElementById(container.getAttribute('aria-describedby'))?.textContent.trim() || '' : '',
+              placeholder: '',
+              autocomplete: ''
+            });
+          } else {
+            console.log(`  ✗ Skipped: No label or fieldId found`);
+          }
+        } else {
+          console.log(`  ✗ Skipped: Average text length ${avgLength} >= 30`);
+        }
+      } else {
+        console.log(`  ✗ Skipped: ${buttons.length} buttons (need 2-10)`);
+      }
+    });
+
+    console.log(`=== END BUTTON FIELD DETECTION (found ${buttonFields.length} fields) ===\n`);
+
+    return buttonFields;
+  }
+
+  async function scanFormFields() {
+    // Find all input, select, and textarea elements, plus comboboxes
+    const inputs = document.querySelectorAll('input, select, textarea, [role="combobox"], [role="listbox"]');
     const formFields = [];
     const radioGroups = new Map(); // name -> [elements]
     const checkboxGroups = new Map(); // name -> [elements]
     const processedNames = new Set(); // Track processed group names
 
-    inputs.forEach((element) => {
+    // Use for...of instead of forEach to support await
+    for (const element of inputs) {
       // Skip hidden inputs and buttons
       if (element.type === 'hidden' ||
           element.type === 'submit' ||
           element.type === 'button' ||
           element.type === 'image' ||
           element.type === 'reset') {
-        return;
+        continue;
       }
 
-      // Skip if element is not visible
-      if (!isVisible(element)) {
-        return;
+      // For selects, include even if hidden - they might have custom UI
+      const isHiddenSelect = element.tagName === 'SELECT' && !isVisible(element);
+
+      // Skip if element is not visible (except hidden selects with custom UI)
+      if (!isVisible(element) && !isHiddenSelect) {
+        continue;
+      }
+
+      // If it's a hidden select, check if there's visible custom UI for it
+      if (isHiddenSelect) {
+        // Look for associated visible UI (common patterns: sibling div, wrapper with same name/id)
+        const parent = element.parentElement;
+        let hasVisibleUI = false;
+
+        if (parent) {
+          // Check for visible siblings or wrapper elements
+          const siblings = Array.from(parent.children);
+          hasVisibleUI = siblings.some(sibling =>
+            sibling !== element &&
+            isVisible(sibling) &&
+            (sibling.classList.toString().match(/select|dropdown|combo|picker/i) ||
+             sibling.getAttribute('role') === 'combobox')
+          );
+        }
+
+        if (!hasVisibleUI) {
+          continue; // Skip truly hidden selects with no UI
+        }
       }
 
       // Group radio buttons by name
@@ -540,7 +1120,7 @@
           radioGroups.set(element.name, []);
         }
         radioGroups.get(element.name).push(element);
-        return; // Don't process individually
+        continue; // Don't process individually
       }
 
       // Group checkboxes by name (if multiple with same name exist)
@@ -549,26 +1129,26 @@
           checkboxGroups.set(element.name, []);
         }
         checkboxGroups.get(element.name).push(element);
-        return; // Don't process individually for now
+        continue; // Don't process individually for now
       }
 
       // Process all other elements normally
       try {
-        const fieldInfo = extractFieldInfo(element);
+        const fieldInfo = await extractFieldInfo(element);
         formFields.push(fieldInfo);
       } catch (error) {
         console.error('Error extracting field info:', error, element);
       }
-    });
+    }
 
     // Process radio button groups
-    radioGroups.forEach((elements, name) => {
-      if (elements.length === 0) return;
+    for (const [name, elements] of radioGroups) {
+      if (elements.length === 0) continue;
 
       try {
         // Use the first element as the base for the field info
         const firstElement = elements[0];
-        const fieldInfo = extractFieldInfo(firstElement);
+        const fieldInfo = await extractFieldInfo(firstElement);
 
         // Override input_type to indicate it's a group
         fieldInfo.input_type = 'radio_group';
@@ -593,23 +1173,23 @@
       } catch (error) {
         console.error('Error extracting radio group info:', error, name);
       }
-    });
+    }
 
     // Process checkbox groups (only if multiple checkboxes share the same name)
-    checkboxGroups.forEach((elements, name) => {
-      if (elements.length === 0) return;
+    for (const [name, elements] of checkboxGroups) {
+      if (elements.length === 0) continue;
 
       try {
         // If only one checkbox with this name, treat it as individual
         if (elements.length === 1) {
-          const fieldInfo = extractFieldInfo(elements[0]);
+          const fieldInfo = await extractFieldInfo(elements[0]);
           formFields.push(fieldInfo);
-          return;
+          continue;
         }
 
         // Multiple checkboxes with same name - treat as group
         const firstElement = elements[0];
-        const fieldInfo = extractFieldInfo(firstElement);
+        const fieldInfo = await extractFieldInfo(firstElement);
 
         // Override input_type to indicate it's a group
         fieldInfo.input_type = 'checkbox_group';
@@ -634,20 +1214,141 @@
       } catch (error) {
         console.error('Error extracting checkbox group info:', error, name);
       }
-    });
+    }
+
+    // Detect button-based fields (modern UI pattern)
+    try {
+      const buttonFields = detectButtonFields();
+      if (buttonFields.length > 0) {
+        console.log(`Found ${buttonFields.length} button-based field(s)`);
+        formFields.push(...buttonFields);
+      }
+    } catch (error) {
+      console.error('Error detecting button fields:', error);
+    }
 
     return formFields;
   }
 
   /**
+   * Capture context clues for company name extraction
+   * Returns various page elements that might contain the company name
+   */
+  function captureCompanyNameContext() {
+    try {
+      const context = {
+        nav_links: [],
+        headings: [],
+        company_links: [],
+        form_labels: [],
+        page_title: document.title || ''
+      };
+
+    // Capture navigation links (top of page, often contain company homepage)
+    const navElements = document.querySelectorAll('nav a, header a, [role="navigation"] a');
+    navElements.forEach(link => {
+      const text = link.textContent.trim();
+      const href = link.href || '';
+      // Skip empty, very long text, or common navigation words
+      if (text.length > 0 && text.length < 50 &&
+          !text.toLowerCase().match(/^(home|about|careers|jobs|login|sign|apply|back|menu|search)$/)) {
+        context.nav_links.push({ text, href });
+      }
+    });
+    // Limit to first 10 nav links to avoid noise
+    context.nav_links = context.nav_links.slice(0, 10);
+
+    // Capture page headings (h1, h2, h3)
+    const headings = document.querySelectorAll('h1, h2, h3');
+    headings.forEach(heading => {
+      const text = heading.textContent.trim();
+      if (text.length > 0 && text.length < 100) {
+        context.headings.push(text);
+      }
+    });
+    // Limit to first 5 headings
+    context.headings = context.headings.slice(0, 5);
+
+    // Capture links that might go to company homepage
+    const companyLinkPatterns = [
+      /company/i,
+      /employer/i,
+      /organization/i,
+      /about/i
+    ];
+    const allLinks = document.querySelectorAll('a[href]');
+    allLinks.forEach(link => {
+      const text = link.textContent.trim();
+      const href = link.href || '';
+      const isCompanyLink = companyLinkPatterns.some(pattern =>
+        pattern.test(text) || pattern.test(link.className) || pattern.test(link.id)
+      );
+      if (isCompanyLink && text.length > 0 && text.length < 50) {
+        context.company_links.push({ text, href });
+      }
+    });
+    // Limit to first 5 company links
+    context.company_links = context.company_links.slice(0, 5);
+
+    // Capture form labels (often contain company name in questions)
+    const labels = document.querySelectorAll('label');
+    labels.forEach(label => {
+      const text = label.textContent.trim();
+      if (text.length > 0 && text.length < 200) {
+        context.form_labels.push(text);
+      }
+    });
+    // Also capture aria-labels from inputs
+    const ariaLabels = document.querySelectorAll('[aria-label]');
+    ariaLabels.forEach(el => {
+      const ariaLabel = el.getAttribute('aria-label');
+      if (ariaLabel) {
+        const text = ariaLabel.trim();
+        if (text.length > 0 && text.length < 200) {
+          context.form_labels.push(text);
+        }
+      }
+    });
+    // Also capture legends (used for fieldsets)
+    const legends = document.querySelectorAll('legend');
+    legends.forEach(legend => {
+      const text = legend.textContent.trim();
+      if (text.length > 0 && text.length < 200) {
+        context.form_labels.push(text);
+      }
+    });
+    // Limit to first 20 form labels to avoid excessive data
+    context.form_labels = context.form_labels.slice(0, 20);
+
+    console.log('✓ Captured company name context successfully:', context);
+    logToBackend('info', `✓ Captured company name context: ${context.headings.length} headings, ${context.nav_links.length} nav links, ${context.form_labels.length} form labels`);
+    return context;
+  } catch (error) {
+      console.error('❌ Error capturing company name context:', error);
+      logToBackend('error', `❌ Error capturing company name context: ${error.message}`);
+      // Return minimal context on error
+      return {
+        nav_links: [],
+        headings: [],
+        company_links: [],
+        form_labels: [],
+        page_title: document.title || '',
+        error: error.message
+      };
+    }
+  }
+
+  /**
    * Extract job details from the page
-   * Returns {company_name, role_title, job_description}
+   * Returns {company_name, role_title, job_description, company_name_context}
    */
   function extractJobDetails() {
     const result = {
       company_name: '',
       role_title: '',
-      job_description: ''
+      job_location: '',
+      job_description: '',
+      company_name_context: null
     };
 
     // --- Extract Company Name ---
@@ -814,6 +1515,78 @@
       }
     }
 
+    // --- Extract Job Location ---
+    // Look for elements with location-related classes or attributes
+    const locationSelectors = [
+      '[class*="location" i]',
+      '[class*="job-location" i]',
+      '[class*="job_location" i]',
+      '[data-location]',
+      '[itemprop="jobLocation"]',
+      '[itemprop="addressLocality"]',
+      '.location',
+      '.job-location'
+    ];
+
+    for (const selector of locationSelectors) {
+      const locationElement = document.querySelector(selector);
+      if (locationElement) {
+        let locationText = '';
+
+        // Try data attribute first
+        if (locationElement.getAttribute('data-location')) {
+          locationText = locationElement.getAttribute('data-location').trim();
+        } else if (locationElement.textContent) {
+          locationText = locationElement.textContent.trim();
+        }
+
+        // Clean up the location text
+        if (locationText && locationText.length > 0 && locationText.length < 100) {
+          // Remove common prefixes
+          locationText = locationText.replace(/^(location|where):\s*/i, '').trim();
+          result.job_location = locationText;
+          console.log(`📍 Found job location: "${result.job_location}"`);
+          break;
+        }
+      }
+    }
+
+    // Try to extract from page title (often includes location)
+    // e.g., "Product Manager - Mountain View, CA"
+    if (!result.job_location && document.title) {
+      const locationPatterns = [
+        /,\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?),?\s+([A-Z]{2})/,  // "City, State" e.g., "Mountain View, CA"
+        /,\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/,                  // Just "City"
+        /[-|]\s*([A-Z][a-z]+,\s*[A-Z]{2})/                       // "- City, State"
+      ];
+
+      for (const pattern of locationPatterns) {
+        const match = document.title.match(pattern);
+        if (match) {
+          result.job_location = match[0].replace(/^[-|,]\s*/, '').trim();
+          console.log(`📍 Extracted location from title: "${result.job_location}"`);
+          break;
+        }
+      }
+    }
+
+    // Look near the job title for location
+    if (!result.job_location) {
+      const h1 = document.querySelector('h1');
+      if (h1) {
+        // Check siblings or nearby elements
+        const parent = h1.parentElement;
+        if (parent) {
+          const nearbyText = parent.textContent;
+          const locationMatch = nearbyText.match(/([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?),?\s+([A-Z]{2})/);
+          if (locationMatch && locationMatch[0]) {
+            result.job_location = locationMatch[0].trim();
+            console.log(`📍 Found location near title: "${result.job_location}"`);
+          }
+        }
+      }
+    }
+
     // --- Extract Job Description ---
     // Try main content area
     const mainElement = document.querySelector('main, [role="main"]');
@@ -842,11 +1615,43 @@
     // Clean up extracted text (remove extra whitespace)
     result.company_name = result.company_name.replace(/\s+/g, ' ').trim();
     result.role_title = result.role_title.replace(/\s+/g, ' ').trim();
+    result.job_location = result.job_location.replace(/\s+/g, ' ').trim();
     result.job_description = result.job_description.replace(/\s+/g, ' ').trim();
 
     // Truncate job description if too long (keep first 5000 chars)
     if (result.job_description.length > 5000) {
       result.job_description = result.job_description.substring(0, 5000) + '...';
+    }
+
+    // Capture context for company name validation
+    console.log("🔍 DEBUG: About to capture company name context...");
+    logToBackend('debug', '🔍 About to capture company name context');
+    result.company_name_context = captureCompanyNameContext();
+    console.log("🔍 DEBUG: Context captured, value:", result.company_name_context);
+
+    // DEBUG: Log captured context details
+    if (result.company_name_context) {
+      const contextSummary = {
+        url_company: result.company_name,
+        page_title: result.company_name_context.page_title,
+        headings_count: result.company_name_context.headings ? result.company_name_context.headings.length : 0,
+        nav_links_count: result.company_name_context.nav_links ? result.company_name_context.nav_links.length : 0,
+        form_labels_count: result.company_name_context.form_labels ? result.company_name_context.form_labels.length : 0,
+        company_links_count: result.company_name_context.company_links ? result.company_name_context.company_links.length : 0,
+        headings: result.company_name_context.headings,
+        nav_links: result.company_name_context.nav_links,
+        form_labels: result.company_name_context.form_labels ? result.company_name_context.form_labels.slice(0, 5) : [],
+        company_links: result.company_name_context.company_links,
+        has_error: result.company_name_context.error
+      };
+      console.log("🔍 DEBUG: Captured company name context:", contextSummary);
+      logToBackend('debug', `🔍 Context summary: URL=${result.company_name}, title="${result.company_name_context.page_title}", headings=${contextSummary.headings_count}, nav=${contextSummary.nav_links_count}, labels=${contextSummary.form_labels_count}`);
+      logToBackend('debug', `🔍 Headings: ${JSON.stringify(result.company_name_context.headings)}`);
+      logToBackend('debug', `🔍 Nav links: ${JSON.stringify(result.company_name_context.nav_links)}`);
+      logToBackend('debug', `🔍 First 5 form labels: ${JSON.stringify(result.company_name_context.form_labels.slice(0, 5))}`);
+    } else {
+      console.error("🔍 DEBUG: Context is null or undefined!");
+      logToBackend('error', '🔍 Context is null or undefined!');
     }
 
     return result;
@@ -1005,7 +1810,7 @@
    * @param {Object} fillValues - Object mapping field IDs/names to values
    * @returns {Object} - Summary of filled fields and errors
    */
-  function fillFormFields(fillValues) {
+  async function fillFormFields(fillValues) {
     console.log('Filling form fields with values:', fillValues);
 
     const results = {
@@ -1100,6 +1905,101 @@
             console.warn(`Available options:`, Array.from(element.options).map(o => `"${o.value}" / "${o.text}"`));
             results.errors.push({ field: fieldIdentifier, error: 'Option not found' });
           }
+        } else if (element.getAttribute('role') === 'combobox' ||
+                   element.getAttribute('aria-haspopup') === 'listbox' ||
+                   element.getAttribute('aria-autocomplete') === 'list') {
+          // Handle custom dropdowns (like Greenhouse)
+          console.log(`Handling custom dropdown ${fieldIdentifier}...`);
+
+          // Click to open dropdown
+          element.focus();
+          element.click();
+
+          // Wait for dropdown to open
+          await new Promise(resolve => setTimeout(resolve, 600));
+
+          // Look for aria-controls to find the dropdown menu
+          const controlsId = element.getAttribute('aria-controls');
+          let listbox = null;
+
+          if (controlsId) {
+            listbox = document.getElementById(controlsId);
+          }
+
+          // If not found, search for visible listboxes
+          if (!listbox) {
+            const visibleListboxes = Array.from(document.querySelectorAll('[role="listbox"], [role="menu"]'))
+              .filter(lb => {
+                const style = window.getComputedStyle(lb);
+                return style.display !== 'none' && style.visibility !== 'hidden';
+              });
+
+            if (visibleListboxes.length > 0) {
+              listbox = visibleListboxes[0];
+            }
+          }
+
+          if (listbox) {
+            // Extract options from listbox
+            const optionElements = listbox.querySelectorAll('[role="option"], li, .option');
+            console.log(`Found ${optionElements.length} options in dropdown for ${fieldIdentifier}`);
+
+            // Find matching option using fuzzy matching
+            let matchedOption = null;
+            for (const opt of optionElements) {
+              const optText = opt.textContent.trim();
+              const optValue = opt.getAttribute('data-value') || opt.getAttribute('value') || optText;
+
+              if (optValue === String(value) || optText === String(value)) {
+                matchedOption = opt;
+                break;
+              }
+            }
+
+            // Try fuzzy match if exact match not found
+            if (!matchedOption) {
+              for (const opt of optionElements) {
+                const optText = opt.textContent.trim();
+                const optValue = opt.getAttribute('data-value') || opt.getAttribute('value') || optText;
+
+                if (fuzzyMatchOption(value, optValue, optText)) {
+                  matchedOption = opt;
+                  break;
+                }
+              }
+            }
+
+            if (matchedOption) {
+              // Click the matched option
+              matchedOption.click();
+              matchedOption.dispatchEvent(new Event('click', { bubbles: true }));
+
+              console.log(`✓ Selected option in ${fieldIdentifier}: ${matchedOption.textContent.trim()}`);
+              results.filled.push({ field: fieldIdentifier, type: 'custom_select', value: matchedOption.textContent.trim() });
+
+              // Wait a bit then close dropdown
+              await new Promise(resolve => setTimeout(resolve, 200));
+              element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+              element.blur();
+            } else {
+              console.warn(`Option not found in custom dropdown ${fieldIdentifier}:`, value);
+              console.warn(`Available options:`, Array.from(optionElements).map(o => o.textContent.trim()).slice(0, 10));
+              results.errors.push({ field: fieldIdentifier, error: 'Option not found' });
+
+              // Close dropdown
+              element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+              element.blur();
+            }
+          } else {
+            console.warn(`No listbox found for ${fieldIdentifier}, falling back to direct input`);
+            element.value = String(value);
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+            element.blur();
+          }
+
+          // Small delay between fields to avoid interference
+          await new Promise(resolve => setTimeout(resolve, 200));
         } else {
           // Handle text inputs, textareas, etc.
           element.value = String(value);
@@ -1123,7 +2023,7 @@
   }
 
   // Execute the scan and return results
-  const fields = scanFormFields();
+  const fields = await scanFormFields();
   const actions = scanActions();
   const jobDetails = extractJobDetails();
 
