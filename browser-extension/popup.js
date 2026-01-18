@@ -1,11 +1,46 @@
 // Extension version for debugging
 const EXTENSION_VERSION = 'v2.0-20260116-2100';
+
+// Capture all console logs for saving
+const capturedLogs = [];
+const originalConsoleLog = console.log;
+const originalConsoleWarn = console.warn;
+const originalConsoleError = console.error;
+
+console.log = function(...args) {
+  const timestamp = new Date().toISOString();
+  const message = args.map(arg =>
+    typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+  ).join(' ');
+  capturedLogs.push(`[${timestamp}] [POPUP] ${message}`);
+  originalConsoleLog.apply(console, args);
+};
+
+console.warn = function(...args) {
+  const timestamp = new Date().toISOString();
+  const message = args.map(arg =>
+    typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+  ).join(' ');
+  capturedLogs.push(`[${timestamp}] [POPUP:WARN] ${message}`);
+  originalConsoleWarn.apply(console, args);
+};
+
+console.error = function(...args) {
+  const timestamp = new Date().toISOString();
+  const message = args.map(arg =>
+    typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+  ).join(' ');
+  capturedLogs.push(`[${timestamp}] [POPUP:ERROR] ${message}`);
+  originalConsoleError.apply(console, args);
+};
+
 console.log('🔧 Extension popup loaded:', EXTENSION_VERSION);
 
 // Get DOM elements
 const scanButton = document.getElementById('scanButton');
 const sendButton = document.getElementById('sendButton');
 const fillButton = document.getElementById('fillButton');
+const saveLogsButton = document.getElementById('saveLogsButton');
 const clearButton = document.getElementById('clearButton');
 const statusDiv = document.getElementById('status');
 
@@ -27,6 +62,31 @@ let currentTabId = null;
 
 // Backend API endpoint
 const BACKEND_URL = 'http://localhost:5050/api/match-fields';
+
+/**
+ * Helper: Detect new fields by comparing two scans
+ * Returns fields in currentFields that weren't in previousFields
+ */
+function getNewFields(previousFields, currentFields) {
+  const previousIds = new Set(previousFields.map(f => f.id));
+  return currentFields.filter(f => !previousIds.has(f.id));
+}
+
+/**
+ * Helper: Re-scan form fields by calling into content script via message passing
+ * Returns only NEW field array (filters out previously scanned fields)
+ * @param {number} tabId - Chrome tab ID
+ * @param {Array} previousFieldIds - Array of field IDs to exclude from rescan
+ */
+async function rescanFormFields(tabId, previousFieldIds = []) {
+  console.log(`📨 Sending rescanFormFields message (excluding ${previousFieldIds.length} previous fields)`);
+  const response = await chrome.tabs.sendMessage(tabId, {
+    action: 'rescanFormFields',
+    previousFieldIds
+  });
+  console.log(`📥 Received ${response.fields?.length || 0} NEW fields from rescan`);
+  return response.fields || [];
+}
 
 // Button state management with cooldown
 const buttonStates = new Map(); // Track original text for each button
@@ -467,7 +527,7 @@ sendButton.addEventListener('click', async () => {
   }
 });
 
-// Handle fill form button click
+// Handle fill form button click with iterative conditional field support
 fillButton.addEventListener('click', async () => {
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('🔘 FILL FORM BUTTON CLICKED');
@@ -476,9 +536,9 @@ fillButton.addEventListener('click', async () => {
   console.log('scannedData exists?', !!scannedData);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-  if (!backendResponse) {
-    console.error('❌ No backend response - stopping fill');
-    statusDiv.textContent = 'No backend response available. Please send to backend first.';
+  if (!backendResponse || !scannedData) {
+    console.error('❌ No backend response or scanned data - stopping fill');
+    statusDiv.textContent = 'No backend response available. Please scan and send to backend first.';
     statusDiv.className = 'status error';
     return;
   }
@@ -499,6 +559,79 @@ fillButton.addEventListener('click', async () => {
     }
 
     console.log('✓ Active tab ID:', tab.id);
+
+    // Iterative fill loop to handle conditional fields
+    let previousFields = [];
+    let currentFields = scannedData.fields || [];
+    let iteration = 0;
+    const MAX_ITERATIONS = 5; // Safety limit
+    const filledFieldIds = new Set(); // Track already-filled fields across iterations
+
+    while (iteration < MAX_ITERATIONS) {
+      iteration++;
+      console.log(`━━━ ITERATION ${iteration}/${MAX_ITERATIONS} ━━━`);
+      console.log(`Current fields: ${currentFields.length}`);
+
+      const newFields = getNewFields(previousFields, currentFields);
+      console.log(`New fields detected: ${newFields.length}`);
+
+      if (newFields.length === 0 && iteration > 1) {
+        console.log('✅ No new fields detected, iteration complete.');
+        break;
+      }
+
+      // On first iteration, use all fields. On subsequent iterations, use only new fields
+      const fieldsToProcess = iteration === 1 ? currentFields : newFields;
+      console.log(`Fields to process this iteration: ${fieldsToProcess.length}`);
+
+      // On iteration 2+, send new fields to backend for matching
+      if (iteration > 1 && newFields.length > 0) {
+        console.log(`🔄 Iteration ${iteration}: Sending ${newFields.length} new fields to backend for matching...`);
+
+        try {
+          // Prepare job details (same as initial scan)
+          const jobDetails = {
+            company_name: companyInput.value || scannedData.jobDetails?.company_name || '',
+            role_title: roleInput.value || scannedData.jobDetails?.role_title || '',
+            job_location: scannedData.jobDetails?.job_location || '',
+            job_description: scannedData.jobDetails?.job_description || '',
+            company_name_context: scannedData.jobDetails?.company_name_context
+          };
+
+          // Send new fields to backend
+          const response = await fetch(BACKEND_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fields: newFields,
+              actions: [],
+              jobDetails: jobDetails
+            })
+          });
+
+          if (!response.ok) {
+            throw new Error(`Backend returned ${response.status}: ${response.statusText}`);
+          }
+
+          const newBackendResponse = await response.json();
+          console.log(`✅ Backend matched ${newFields.length} new fields:`, newBackendResponse);
+
+          // Merge new mappings and values with existing ones
+          Object.assign(backendResponse.field_mappings, newBackendResponse.field_mappings || {});
+          Object.assign(backendResponse.fill_values, newBackendResponse.fill_values || {});
+          Object.assign(backendResponse.files, newBackendResponse.files || {});
+          backendResponse.needs_human = [...(backendResponse.needs_human || []), ...(newBackendResponse.needs_human || [])];
+
+          console.log(`📊 Updated backend response with new field mappings`);
+          console.log(`Total fill_values: ${Object.keys(backendResponse.fill_values).length}`);
+
+        } catch (error) {
+          console.error('❌ Error sending new fields to backend:', error);
+          statusDiv.textContent = `Error matching new fields: ${error.message}`;
+          statusDiv.className = 'status error';
+          // Continue anyway - maybe some fields can still be filled
+        }
+      }
 
     // Execute the fill function directly
     const fillValues = backendResponse.fill_values || {};
@@ -535,10 +668,11 @@ fillButton.addEventListener('click', async () => {
     // Execute fillFormFields function directly by injecting it
     const fillResults = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: async (fillValues, fieldMetadata) => {
+      func: async (fillValues, fieldMetadata, alreadyFilledFieldIds) => {
         console.log('=== FILL SCRIPT EXECUTING ===');
         console.log('Received fill values:', fillValues);
         console.log('Received field metadata:', fieldMetadata);
+        console.log('Already filled field IDs:', alreadyFilledFieldIds);
 
         // Detect page navigation during fill
         let pageNavigated = false;
@@ -691,13 +825,31 @@ fillButton.addEventListener('click', async () => {
         const results = {
           filled: [],
           errors: [],
-          notFound: []
+          notFound: [],
+          skipped: []
         };
 
+        // Recreate Set from array passed in
+        const alreadyFilled = new Set(alreadyFilledFieldIds || []);
+
+        // Simple fill counter - logs each actual fill attempt
+        let fillCount = 0;
+
         console.log('Starting to fill', Object.keys(fillValues).length, 'fields');
+        console.log('Already filled from previous iterations:', alreadyFilled.size);
 
         for (const [fieldIdentifier, value] of Object.entries(fillValues)) {
+          // Skip if already filled in a previous iteration
+          if (alreadyFilled.has(fieldIdentifier)) {
+            console.log('⏭️ Skipping already-filled field:', fieldIdentifier);
+            results.skipped.push(fieldIdentifier);
+            continue;
+          }
+
           try {
+            // Increment and log BEFORE fill attempt
+            fillCount++;
+            console.log(`📊 FILL #${fillCount}: ${fieldIdentifier}`);
             console.log('🔍 [CHECKPOINT:fillForm:ProcessingField]', { fieldIdentifier, value });
 
             let element = document.getElementById(fieldIdentifier);
@@ -794,6 +946,7 @@ fillButton.addEventListener('click', async () => {
                   element.dispatchEvent(new Event('change', { bubbles: true }));
                 }
                 results.filled.push({ field: fieldIdentifier, type: 'checkbox', value: true });
+                alreadyFilled.add(fieldIdentifier);
               } else if (value === false || falseValues.includes(val)) {
                 if (element.checked) {
                   element.checked = false;
@@ -801,6 +954,7 @@ fillButton.addEventListener('click', async () => {
                   element.dispatchEvent(new Event('change', { bubbles: true }));
                 }
                 results.filled.push({ field: fieldIdentifier, type: 'checkbox', value: false });
+                alreadyFilled.add(fieldIdentifier);
               }
 
               element.blur();
@@ -815,6 +969,7 @@ fillButton.addEventListener('click', async () => {
                 element.dispatchEvent(new Event('click', { bubbles: true }));
                 element.dispatchEvent(new Event('change', { bubbles: true }));
                 results.filled.push({ field: fieldIdentifier, type: 'radio', value: true });
+                alreadyFilled.add(fieldIdentifier);
               }
 
               element.blur();
@@ -836,6 +991,7 @@ fillButton.addEventListener('click', async () => {
                 element.dispatchEvent(new Event('blur', { bubbles: true }));
                 element.blur();
                 results.filled.push({ field: fieldIdentifier, type: 'select', value: option.text });
+                alreadyFilled.add(fieldIdentifier);
                 console.log(`Set select: ${fieldIdentifier} = ${option.text} (matched from: ${value})`);
               } else {
                 console.warn(`Option not found in select ${fieldIdentifier}:`, value);
@@ -900,6 +1056,7 @@ fillButton.addEventListener('click', async () => {
                 matchedButton.blur();
 
                 results.filled.push({ field: fieldIdentifier, type: 'button_group', value: matchedButton.textContent.trim() });
+                alreadyFilled.add(fieldIdentifier);
                 console.log('✅ [CHECKPOINT:fillForm:ButtonGroup:Success]', {
                   fieldIdentifier,
                   clicked: matchedButton.textContent.trim()
@@ -920,8 +1077,85 @@ fillButton.addEventListener('click', async () => {
               const metadata = fieldMetadata[fieldIdentifier];
 
               if (!metadata || !metadata.options || metadata.options.length === 0) {
-                console.warn('❌ [CHECKPOINT:fillForm:Combobox:NoPreExtractedOptions]', { fieldIdentifier });
-                results.errors.push({ field: fieldIdentifier, error: 'No pre-extracted options available' });
+                // No pre-extracted options - try autocomplete pattern for dynamic dropdowns
+                console.log('🔍 [CHECKPOINT:fillForm:Combobox:TryingAutocomplete]', { fieldIdentifier, value });
+
+                try {
+                  const input = element.querySelector('input') || element;
+
+                  // Step 1: Focus the input
+                  input.focus();
+
+                  // Step 2: Type the value using native setter
+                  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                  if (nativeInputValueSetter) {
+                    nativeInputValueSetter.call(input, String(value));
+                  } else {
+                    input.value = String(value);
+                  }
+
+                  // Step 3: Dispatch input event (triggers autocomplete fetch)
+                  input.dispatchEvent(new Event('input', { bubbles: true }));
+
+                  // Step 4: Wait for suggestions to load
+                  await new Promise(resolve => setTimeout(resolve, 400));
+
+                  // Step 5: Check if suggestions/listbox appeared
+                  const listboxId = element.getAttribute('aria-controls') || input.getAttribute('aria-controls');
+                  let listbox = listboxId ? document.getElementById(listboxId) : null;
+
+                  if (!listbox) {
+                    // Find visible listbox
+                    const visibleListboxes = Array.from(document.querySelectorAll('[role="listbox"], [role="menu"]'))
+                      .filter(lb => {
+                        const style = window.getComputedStyle(lb);
+                        return style.display !== 'none' && style.visibility !== 'hidden';
+                      });
+                    listbox = visibleListboxes[0];
+                  }
+
+                  // Step 6: If suggestions exist, click first matching one
+                  if (listbox) {
+                    const options = listbox.querySelectorAll('[role="option"]');
+                    console.log(`🔍 [CHECKPOINT:fillForm:Combobox:AutocompleteSuggestions] Found ${options.length} suggestions`);
+
+                    if (options.length > 0) {
+                      // Look for option that contains our value
+                      let matchedOption = null;
+                      const searchValue = String(value).toLowerCase();
+
+                      for (const opt of options) {
+                        const optText = opt.textContent.trim().toLowerCase();
+                        if (optText.includes(searchValue) || searchValue.includes(optText)) {
+                          matchedOption = opt;
+                          break;
+                        }
+                      }
+
+                      // Click matched option or first option if no match
+                      const optionToClick = matchedOption || options[0];
+                      optionToClick.click();
+                      console.log('✅ [CHECKPOINT:fillForm:Combobox:ClickedSuggestion]', optionToClick.textContent.trim());
+                    } else {
+                      console.log('🔍 [CHECKPOINT:fillForm:Combobox:NoSuggestions] Accepting typed value');
+                    }
+                  } else {
+                    // Step 7: No suggestions - leave typed value (many forms accept it)
+                    console.log('🔍 [CHECKPOINT:fillForm:Combobox:NoListbox] Accepting typed value');
+                  }
+
+                  // Dispatch remaining events
+                  input.dispatchEvent(new Event('change', { bubbles: true }));
+                  input.blur();
+
+                  results.filled.push({ field: fieldIdentifier, type: 'combobox', value: value });
+                  alreadyFilled.add(fieldIdentifier);
+                  console.log('✅ [CHECKPOINT:fillForm:Combobox:AutocompleteSuccess]', { fieldIdentifier, value });
+
+                } catch (error) {
+                  console.error('❌ [CHECKPOINT:fillForm:Combobox:AutocompleteError]', error);
+                  results.errors.push({ field: fieldIdentifier, error: 'Autocomplete failed: ' + error.message });
+                }
               } else {
                 console.log('🔍 [CHECKPOINT:fillForm:Combobox:UsingPreExtractedOptions]', {
                   fieldIdentifier,
@@ -1057,6 +1291,7 @@ fillButton.addEventListener('click', async () => {
                   }
 
                   results.filled.push({ field: fieldIdentifier, type: 'combobox', value: matchedOption.value });
+                  alreadyFilled.add(fieldIdentifier);
                   console.log('✅ [CHECKPOINT:fillForm:Combobox:Success]', {
                     fieldIdentifier,
                     setValue: matchedOption.value,
@@ -1101,6 +1336,7 @@ fillButton.addEventListener('click', async () => {
               element.blur();
 
               results.filled.push({ field: fieldIdentifier, type: fieldType, value: value });
+              alreadyFilled.add(fieldIdentifier);
             }
           } catch (error) {
             console.error(`Error filling field ${fieldIdentifier}:`, error);
@@ -1117,20 +1353,33 @@ fillButton.addEventListener('click', async () => {
         }
 
         console.log('Fill results:', results);
-        return results;
+        console.log('Filled field IDs:', Array.from(alreadyFilled));
+
+        // Return results with updated filledFieldIds
+        return {
+          ...results,
+          filledFieldIds: Array.from(alreadyFilled)
+        };
       },
-      args: [fillValues, fieldMetadata]
+      args: [fillValues, fieldMetadata, Array.from(filledFieldIds)]
     });
 
     console.log('Fill script completed. Results:', fillResults);
     const result = fillResults[0]?.result;
     console.log('Extracted result:', result);
 
-    // Handle file uploads
+    // Update filledFieldIds Set with newly filled fields
+    if (result?.filledFieldIds) {
+      result.filledFieldIds.forEach(id => filledFieldIds.add(id));
+      console.log(`📊 Total filled fields across all iterations: ${filledFieldIds.size}`);
+    }
+
+    // Handle file uploads (only on first iteration)
     let filesUploaded = 0;
     let filesErrors = 0;
 
-    if (Object.keys(files).length > 0) {
+    if (Object.keys(files).length > 0 && iteration === 1) {
+      console.log('📎 Uploading files (iteration 1 only)...');
       statusDiv.textContent = 'Uploading files...';
 
       // Detect file type from field metadata (label, name, hint)
@@ -1342,11 +1591,13 @@ fillButton.addEventListener('click', async () => {
 
     if (result) {
       const filledCount = result.filled?.length || 0;
+      const skippedCount = result.skipped?.length || 0;
       const notFoundCount = result.notFound?.length || 0;
       const errorCount = result.errors?.length || 0;
 
       let statusParts = [];
       if (filledCount > 0) statusParts.push(`${filledCount} field${filledCount !== 1 ? 's' : ''} filled`);
+      if (skippedCount > 0) statusParts.push(`${skippedCount} skipped`);
       if (filesUploaded > 0) statusParts.push(`${filesUploaded} file${filesUploaded !== 1 ? 's' : ''} uploaded`);
       if (notFoundCount > 0) statusParts.push(`${notFoundCount} not found`);
       if (errorCount > 0 || filesErrors > 0) statusParts.push(`${errorCount + filesErrors} error${(errorCount + filesErrors) !== 1 ? 's' : ''}`);
@@ -1365,9 +1616,24 @@ fillButton.addEventListener('click', async () => {
       statusDiv.className = 'status';
     }
 
+      // Wait briefly for conditional fields to appear after filling
+      console.log('⏳ Waiting 500ms for conditional fields to appear...');
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Rescan for new fields (pass previous field IDs to filter them out)
+      console.log('🔄 Rescanning form fields...');
+      previousFields = currentFields;
+      const previousFieldIds = previousFields.map(f => f.id);
+      const newFieldsOnly = await rescanFormFields(tab.id, previousFieldIds);
+
+      // Combine previous fields with new fields for next iteration
+      currentFields = [...previousFields, ...newFieldsOnly];
+      console.log(`Rescan complete. Previous: ${previousFields.length}, New: ${newFieldsOnly.length}, Total: ${currentFields.length}`);
+    } // End of while loop
+
     // Verify state is still intact after fill
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('✅ FILL FORM COMPLETED');
+    console.log(`✅ FILL FORM COMPLETED (${iteration} iteration${iteration !== 1 ? 's' : ''})`);
     console.log('State check after fill:');
     console.log('  - scannedData still exists?', !!scannedData);
     console.log('  - backendResponse still exists?', !!backendResponse);
@@ -1384,6 +1650,59 @@ fillButton.addEventListener('click', async () => {
   } finally {
     // Re-enable button with 2-second cooldown
     await enableButtonWithCooldown(fillButton, 2000);
+  }
+});
+
+// Handle save logs button click
+saveLogsButton.addEventListener('click', async () => {
+  try {
+    // Get active tab to collect content script logs
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+    // Try to get content script logs (if content script is running)
+    let contentLogs = [];
+    try {
+      const result = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          // Return all console logs from content script if captured
+          return window.capturedContentLogs || [];
+        }
+      });
+      contentLogs = result[0]?.result || [];
+    } catch (e) {
+      console.warn('Could not retrieve content script logs:', e);
+    }
+
+    // Combine popup and content logs
+    const allLogs = [
+      '=== EXTENSION LOGS ===',
+      '',
+      '--- POPUP LOGS ---',
+      ...capturedLogs,
+      '',
+      '--- CONTENT/PAGE LOGS ---',
+      ...contentLogs
+    ].join('\n');
+
+    // Send to backend to save
+    const response = await fetch('http://localhost:5050/api/save-session-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ log: allLogs })
+    });
+
+    if (response.ok) {
+      statusDiv.textContent = `Logs saved to logs/extension.log (${capturedLogs.length} popup logs, ${contentLogs.length} content logs)`;
+      statusDiv.className = 'status success';
+      console.log(`✅ Saved ${capturedLogs.length + contentLogs.length} log entries to extension.log`);
+    } else {
+      throw new Error(`Backend returned ${response.status}`);
+    }
+  } catch (error) {
+    console.error('Error saving logs:', error);
+    statusDiv.textContent = `Error saving logs: ${error.message}`;
+    statusDiv.className = 'status error';
   }
 });
 

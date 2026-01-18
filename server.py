@@ -456,6 +456,7 @@ def generate_application_content(
     fields_to_process: list,
     field_mapping: dict,
     profile: dict,
+    my_background: str,
     config: dict | None = None
 ) -> dict:
     """
@@ -467,6 +468,7 @@ def generate_application_content(
         fields_to_process: List of dicts with {field_id, action, label, hint}
         field_mapping: The field mappings for context on what other fields contain
         profile: User profile data dictionary
+        my_background: Detailed background narrative for experience questions
         config: Application configuration (will load if not provided)
 
     Returns:
@@ -498,6 +500,7 @@ def generate_application_content(
         cover_letter_text=cover_letter_text,
         why_paragraph=why_paragraph,
         profile=profile_json,
+        my_background=my_background,
         fields_json=fields_json,
         form_analysis=field_mapping_json
     )
@@ -794,6 +797,34 @@ def map_form_fields(form_fields: list[dict], profile: dict, config: dict | None 
             text = text.strip()
 
         mapping = json.loads(text)
+
+        # Log raw response type for debugging
+        print(f"🔍 [CHECKPOINT:map_form_fields:RawResponse] Type: {type(mapping).__name__}, Value preview: {str(mapping)[:200]}")
+
+        # Defensive handling: LLM sometimes returns list instead of dict
+        if isinstance(mapping, list):
+            print(f"⚠️  [CHECKPOINT:map_form_fields:ListResponse] LLM returned list instead of dict")
+            if len(mapping) == 1 and isinstance(mapping[0], dict):
+                # Single dict wrapped in list
+                mapping = mapping[0]
+                print(f"   ↳ Extracted single dict from list: {len(mapping)} entries")
+            elif len(mapping) > 0:
+                # Multiple dicts in list - merge them
+                merged = {}
+                for item in mapping:
+                    if isinstance(item, dict):
+                        merged.update(item)
+                mapping = merged
+                print(f"   ↳ Merged {len(mapping)} dicts from list")
+            else:
+                # Empty list
+                print(f"   ↳ Empty list returned, using empty dict")
+                mapping = {}
+
+        if not isinstance(mapping, dict):
+            print(f"❌ [CHECKPOINT:map_form_fields:InvalidType] Expected dict, got {type(mapping).__name__}, returning empty dict")
+            return {}
+
         print(f"✅ [CHECKPOINT:map_form_fields:Success] Field mapping complete: {len(mapping)} entries")
 
         # Debug: Show how cover letter candidates were mapped
@@ -869,6 +900,126 @@ def convert_boolean_to_option(value: bool, field_options: list[dict]) -> str | b
             return str(next(opt['value'] for opt in field_options if opt.get('text', '').lower() == 'false'))
 
     # No clear match, return original
+    return value
+
+
+def resolve_race_field(field_options: list[dict], profile: dict) -> str | None:
+    """
+    Resolve race field value by trying more specific values first, then falling back to general.
+    Works with any race values - no hardcoding of specific ethnicities.
+
+    Args:
+        field_options: List of option dicts with 'value' and 'text' keys from the dropdown
+        profile: User profile data dictionary
+
+    Returns:
+        The exact matching option text from the dropdown, or None if no match
+
+    Example:
+        If profile has race_granular="Middle Eastern" and options include "Middle Eastern",
+        returns "Middle Eastern".
+        If options don't have Middle Eastern, tries race_primary="White" and returns
+        "White (Not Hispanic or Latino)" if that's the exact option text.
+    """
+    demographics = profile.get("demographics", {})
+
+    # Order of preference - more specific first, then general
+    race_values = [
+        demographics.get("race_granular"),
+        demographics.get("race_primary")
+    ]
+
+    # Build a mapping of lowercase option text to original option value
+    # This allows case-insensitive partial matching while returning exact text
+    options_map = {}
+    for opt in field_options:
+        opt_value = opt.get('value', '').strip()
+        opt_text = opt.get('text', '').strip()
+        if opt_value:
+            options_map[opt_value.lower()] = opt_value
+        if opt_text:
+            options_map[opt_text.lower()] = opt_value  # Return value, not text
+
+    # Try each race value in order of specificity
+    for race_val in race_values:
+        if not race_val:
+            continue
+
+        race_lower = race_val.lower().strip()
+
+        # Strategy 1: Exact match
+        if race_lower in options_map:
+            return options_map[race_lower]
+
+        # Strategy 2: Partial match - option starts with or contains the race value
+        # Example: "White" matches "White (Not Hispanic or Latino)"
+        for opt_lower, opt_original in options_map.items():
+            if opt_lower.startswith(race_lower) or race_lower in opt_lower:
+                # Ensure it's a word boundary match, not substring
+                # "White" should match "White (...)" but not "Whitefish"
+                import re
+                pattern = r'\b' + re.escape(race_lower) + r'\b'
+                if re.search(pattern, opt_lower):
+                    return opt_original
+
+    # No match found
+    return None
+
+
+def fuzzy_match_option(value: str, field_options: list[dict]) -> str:
+    """
+    Fuzzy match a string value to available dropdown/radio options.
+    Useful for matching "White" to "White (Not Hispanic or Latino)" or similar.
+
+    Args:
+        value: The string value to match (e.g., "White", "Middle Eastern")
+        field_options: List of option dicts with 'value' and 'text' keys
+
+    Returns:
+        The exact matching option value/text (str), or the original value if no match
+    """
+    if not isinstance(value, str) or not field_options:
+        return value
+
+    value_lower = value.lower().strip()
+
+    # Strategy 1: Exact match (case-insensitive)
+    for opt in field_options:
+        opt_value = opt.get('value', '').strip()
+        opt_text = opt.get('text', '').strip()
+
+        if value_lower == opt_value.lower() or value_lower == opt_text.lower():
+            return opt_value  # Return exact option value
+
+    # Strategy 2: Partial match - option contains the value
+    # Example: "White" matches "White (Not Hispanic or Latino)"
+    for opt in field_options:
+        opt_value = opt.get('value', '').strip()
+        opt_text = opt.get('text', '').strip()
+
+        # Check if the profile value appears as a token in the option text
+        if value_lower in opt_value.lower() or value_lower in opt_text.lower():
+            # Additional check: make sure it's a word boundary match, not substring
+            # "White" should match "White (...)" but not "Whitefish"
+            import re
+            pattern = r'\b' + re.escape(value_lower) + r'\b'
+            if re.search(pattern, opt_value.lower()) or re.search(pattern, opt_text.lower()):
+                return opt_value  # Return exact option value
+
+    # Strategy 3: Token overlap - for values like "Middle Eastern or North African"
+    value_tokens = set(value_lower.split())
+    for opt in field_options:
+        opt_value = opt.get('value', '').strip()
+        opt_text = opt.get('text', '').strip()
+
+        opt_tokens = set(opt_value.lower().split()) | set(opt_text.lower().split())
+        overlap = value_tokens & opt_tokens
+
+        # If at least 50% of value tokens are in the option, consider it a match
+        if len(overlap) >= len(value_tokens) * 0.5 and len(overlap) >= 1:
+            return opt_value
+
+    # No match found, return original value
     return value
 
 
@@ -968,8 +1119,29 @@ def resolve_profile_values(field_mapping: dict, profile: dict, fields: list[dict
                     if isinstance(current_value, dict) and part in current_value:
                         current_value = current_value[part]
                     else:
-                        # Path not found in profile
-                        raise KeyError(f"Path '{mapping_value}' not found in profile")
+                        # Path not found - check for common LLM mistakes with fallback mappings
+                        fallback_mappings = {
+                            'demographics.race': 'demographics.race_primary',
+                            # Add other common mistakes here as discovered
+                        }
+
+                        if mapping_value in fallback_mappings:
+                            fallback_path = fallback_mappings[mapping_value]
+                            print(f"⚠️  WARNING: LLM returned invalid path '{mapping_value}', using fallback '{fallback_path}'")
+
+                            # Try to resolve the fallback path
+                            fallback_parts = fallback_path.split('.')
+                            current_value = profile
+                            for fallback_part in fallback_parts:
+                                if isinstance(current_value, dict) and fallback_part in current_value:
+                                    current_value = current_value[fallback_part]
+                                else:
+                                    raise KeyError(f"Fallback path '{fallback_path}' also not found in profile")
+                            # Successfully resolved fallback - break out of the original loop
+                            break
+                        else:
+                            # Path not found in profile and no fallback available
+                            raise KeyError(f"Path '{mapping_value}' not found in profile")
 
             # Only add if we got a value (allow False and 0, but skip None and empty strings)
             if current_value is not None and current_value != '':
@@ -1003,8 +1175,42 @@ def resolve_profile_values(field_mapping: dict, profile: dict, fields: list[dict
                         print(f"Resolved {field_id}: {mapping_value} -> {current_value} -> '{converted_value}' (default boolean conversion, field not in field_map)")
                         print(f"  DEBUG: Field '{field_id}' NOT FOUND in field_map. Available keys: {list(field_map.keys())[:10]}...")
                 else:
-                    resolved_values[field_id] = current_value
-                    print(f"Resolved {field_id}: {mapping_value} -> {current_value}")
+                    # For string values, handle race fields specially or use fuzzy matching
+                    if isinstance(current_value, str) and field_id in field_map:
+                        field_info = field_map[field_id]
+                        field_options = field_info.get('options', [])
+
+                        if field_options:
+                            # Check if this is a race field - matches both invalid "demographics.race" and valid paths
+                            # This catches: demographics.race (common LLM error), demographics.race_primary, demographics.race_granular
+                            is_race_field = mapping_value.startswith('demographics.race')
+
+                            if is_race_field:
+                                # Use special race resolution that tries race_granular first, then race_primary
+                                matched_value = resolve_race_field(field_options, profile)
+
+                                if matched_value:
+                                    print(f"Resolved {field_id}: {mapping_value} -> race field resolved to '{matched_value}' (exact option text)")
+                                    resolved_values[field_id] = matched_value
+                                else:
+                                    # No match found - log warning and skip
+                                    print(f"Warning: Race field {field_id} ({mapping_value}) - no matching option found in dropdown")
+                            else:
+                                # Not a race field - use standard fuzzy matching
+                                matched_value = fuzzy_match_option(current_value, field_options)
+
+                                if matched_value != current_value:
+                                    print(f"Resolved {field_id}: {mapping_value} -> '{current_value}' -> fuzzy matched to '{matched_value}' (exact option text)")
+                                    resolved_values[field_id] = matched_value
+                                else:
+                                    resolved_values[field_id] = current_value
+                                    print(f"Resolved {field_id}: {mapping_value} -> {current_value} (no fuzzy match needed)")
+                        else:
+                            resolved_values[field_id] = current_value
+                            print(f"Resolved {field_id}: {mapping_value} -> {current_value}")
+                    else:
+                        resolved_values[field_id] = current_value
+                        print(f"Resolved {field_id}: {mapping_value} -> {current_value}")
             else:
                 print(f"Skipped {field_id}: {mapping_value} (empty value in profile)")
 
@@ -1055,6 +1261,51 @@ def get_file():
 
     logger.log("GET_FILE_SUCCESS", {"path": file_path, "size": requested_path.stat().st_size})
     return send_file(requested_path, as_attachment=True)
+
+
+@app.route('/api/save-session-log', methods=['POST', 'OPTIONS'])
+def save_session_log():
+    """Save extension session log to logs/extension.log (overwrites)."""
+    if request.method == 'OPTIONS':
+        return '', 200
+
+    data = request.get_json()
+    log_content = data.get('log', '')
+
+    # Write to logs/extension.log (overwrite)
+    log_dir = Path('logs')
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / 'extension.log'
+
+    with open(log_file, 'w') as f:
+        f.write(log_content)
+
+    print(f"✅ Saved session log to {log_file} ({len(log_content)} chars)")
+    return jsonify({'status': 'success', 'path': str(log_file)})
+
+
+@app.route('/api/write-log', methods=['POST', 'OPTIONS'])
+def write_log():
+    """Append log entries to logs/extension.log in real-time."""
+    if request.method == 'OPTIONS':
+        return '', 200
+
+    data = request.get_json()
+    logs = data.get('logs', [])
+
+    if not logs:
+        return jsonify({'status': 'success'})
+
+    # Append to logs/extension.log
+    log_dir = Path('logs')
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / 'extension.log'
+
+    with open(log_file, 'a') as f:
+        for log_entry in logs:
+            f.write(log_entry + '\n')
+
+    return jsonify({'status': 'success'})
 
 
 @app.route('/api/match-fields', methods=['OPTIONS'])
@@ -1128,6 +1379,7 @@ def match_fields():
         print(f"🔍 DEBUG: Wrote request data to {debug_request_file}")
 
         print(f"Received {len(fields)} fields and {len(actions)} actions")
+        logger.log("MATCH_FIELDS", {"field_count": len(fields), "action_count": len(actions), "note": "May be partial re-scan"})
 
         # Validate company name using page context if available
         if company_name and company_name_context:
@@ -1192,6 +1444,7 @@ def match_fields():
         # Load configuration and profile
         config = load_config()
         profile = load_profile()
+        my_background = load_prompt("my_background.md")
 
         # Step 1: Map form fields (combines analysis + matching in one call)
         print("=" * 60)
@@ -1368,6 +1621,7 @@ def match_fields():
                     fields_to_process=llm_fields,
                     field_mapping=field_mapping,
                     profile=profile,
+                    my_background=my_background,
                     config=config
                 )
 
@@ -1527,6 +1781,22 @@ def test():
         'method': request.method,
         'message': 'CORS is working'
     }), 200
+
+@app.route('/api/save-extension-logs', methods=['POST'])
+def save_extension_logs():
+    """Save extension logs for debugging."""
+    try:
+        logs = request.json.get('logs', '')
+        logs_dir = Path(__file__).parent / 'logs'
+        logs_dir.mkdir(exist_ok=True)
+
+        log_file = logs_dir / 'extension.log'
+        with open(log_file, 'w', encoding='utf-8') as f:
+            f.write(logs)
+
+        return jsonify({'status': 'saved', 'path': str(log_file)})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 def shutdown_handler():

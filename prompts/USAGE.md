@@ -7,9 +7,9 @@ It shows which Python files use which prompt templates.
 
 ## Summary
 
-- **Total prompts**: 8
-- **Prompts in use**: 8
-- **Unused prompts**: 0
+- **Total prompts**: 11
+- **Prompts in use**: 12
+- **Unused prompts**: -1
 
 
 ## Prompt Usage
@@ -18,50 +18,82 @@ It shows which Python files use which prompt templates.
 
 **Used in 1 location(s):**
 
-- `generate_cover_letter.py:177`
+- `generate_cover_letter.py:189`
+
+### `application_content_prompt.md`
+
+**Used in 1 location(s):**
+
+- `server.py:488`
+
+### `company_name_extraction_prompt.md`
+
+**Used in 1 location(s):**
+
+- `server.py:276`
 
 ### `company_research_prompt.md`
 
-**Used in 1 location(s):**
+**Status**: ⚠️ Not currently used in any Python file
 
-- `generate_cover_letter.py:247`
-
-### `field_matching_prompt.md`
+### `company_research_search_prompt.md`
 
 **Used in 1 location(s):**
 
-- `server.py:220`
+- `generate_cover_letter.py:281`
 
-### `freeform_answer_prompt.md`
+### `company_research_synthesize_prompt.md`
 
 **Used in 1 location(s):**
 
-- `server.py:116`
+- `generate_cover_letter.py:334`
+
+### `form_analysis_prompt.md`
+
+**Used in 1 location(s):**
+
+- `server.py:715`
 
 ### `my_background.md`
 
 **Used in 2 location(s):**
 
-- `generate_cover_letter.py:298`
-- `server.py:115`
+- `generate_cover_letter.py:434`
+- `server.py:131`
 
-### `specific_question_prompt.md`
+### `role_title_cleaning_prompt.md`
 
 **Used in 1 location(s):**
 
-- `server.py:167`
+- `server.py:401`
 
 ### `style_rewrite_prompt.md`
 
 **Used in 1 location(s):**
 
-- `generate_cover_letter.py:370`
+- `generate_cover_letter.py:509`
 
 ### `why_company_prompt.md`
 
 **Used in 1 location(s):**
 
-- `generate_cover_letter.py:304`
+- `generate_cover_letter.py:440`
+
+## ⚠️ Orphaned References
+
+These prompt files are referenced in code but don't exist:
+
+### `freeform_answer_prompt.md`
+
+**Referenced in:**
+
+- `server.py:132`
+
+### `specific_question_prompt.md`
+
+**Referenced in:**
+
+- `server.py:186`
 
 
 ---

@@ -2,37 +2,15 @@
 (async function() {
   const EXTENSION_VERSION = 'v2.0-20260116-2100';
 
-  // Capture all console logs for saving
-  window.capturedContentLogs = [];
-  const originalConsoleLog = console.log;
-  const originalConsoleWarn = console.warn;
-  const originalConsoleError = console.error;
-
+  // Intercept console logs for content script
+  const contentScriptLogs = [];
+  const originalContentConsoleLog = console.log;
   console.log = function(...args) {
     const timestamp = new Date().toISOString();
-    const message = args.map(arg =>
-      typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
-    ).join(' ');
-    window.capturedContentLogs.push(`[${timestamp}] [CONTENT] ${message}`);
-    originalConsoleLog.apply(console, args);
-  };
-
-  console.warn = function(...args) {
-    const timestamp = new Date().toISOString();
-    const message = args.map(arg =>
-      typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
-    ).join(' ');
-    window.capturedContentLogs.push(`[${timestamp}] [CONTENT:WARN] ${message}`);
-    originalConsoleWarn.apply(console, args);
-  };
-
-  console.error = function(...args) {
-    const timestamp = new Date().toISOString();
-    const message = args.map(arg =>
-      typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
-    ).join(' ');
-    window.capturedContentLogs.push(`[${timestamp}] [CONTENT:ERROR] ${message}`);
-    originalConsoleError.apply(console, args);
+    const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ');
+    const logEntry = `[${timestamp}] ${message}`;
+    contentScriptLogs.push(logEntry);
+    originalContentConsoleLog.apply(console, args);
   };
 
   console.log('🔧 Form scanner content script running:', EXTENSION_VERSION);
@@ -1113,6 +1091,109 @@
     return buttonFields;
   }
 
+  /**
+   * Re-scan form fields to capture any newly visible fields
+   * Performs full extraction (including clicking dropdowns) for NEW fields only
+   * @param {Array} previousFieldIds - Array of field IDs from previous scan to skip
+   * @returns {Array} Array of NEW field objects only
+   */
+  async function rescanFormFields(previousFieldIds = []) {
+    console.log(`🔄 Rescan: Skipping ${previousFieldIds.length} previously scanned fields`);
+
+    const previousIdSet = new Set(previousFieldIds);
+    const newFields = [];
+
+    // Query DOM for all form field elements
+    const inputs = document.querySelectorAll('input, select, textarea, [role="combobox"], [role="listbox"]');
+
+    for (const element of inputs) {
+      // Skip hidden/button/submit inputs
+      if (element.type === 'hidden' || element.type === 'submit' ||
+          element.type === 'button' || element.type === 'image' || element.type === 'reset') {
+        continue;
+      }
+
+      // Skip if not visible
+      if (!isVisible(element)) {
+        continue;
+      }
+
+      // Generate field ID using SAME logic as initial scan
+      let fieldId = element.id || element.name;
+      if (!fieldId) {
+        const label = getFieldLabel(element);
+        if (label) {
+          const inputType = getInputType(element);
+          const prefix = inputType === 'combobox' ? 'combobox_' :
+                        inputType === 'custom_select' ? 'custom_select_' :
+                        'field_';
+          fieldId = prefix + label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').substring(0, 50);
+        } else if (element.name) {
+          fieldId = element.name;
+        } else if (element.placeholder) {
+          const inputType = getInputType(element);
+          const prefix = inputType === 'combobox' ? 'combobox_' :
+                        inputType === 'custom_select' ? 'custom_select_' :
+                        'field_';
+          fieldId = prefix + element.placeholder.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').substring(0, 50);
+        }
+      }
+
+      // If ID is in previousFieldIds → skip entirely
+      if (fieldId && previousIdSet.has(fieldId)) {
+        continue;
+      }
+
+      // This is a NEW field - do full extraction
+      const fieldType = getFieldType(element);
+      const inputType = getInputType(element);
+      console.log(`🆕 Rescan: New field detected: ${fieldId} (${fieldType}/${inputType})`);
+
+      try {
+        const fieldInfo = {
+          label: getFieldLabel(element),
+          hint: getFieldHint(element),
+          type: fieldType,
+          input_type: inputType,
+          name: element.name || '',
+          id: fieldId || '',
+          required: isFieldRequired(element),
+          value: getFieldValue(element),
+          placeholder: element.placeholder || '',
+          autocomplete: element.getAttribute('autocomplete') || ''
+        };
+
+        // Set the generated ID on the DOM element (same as initial scan)
+        if (!element.id && fieldId) {
+          element.setAttribute('id', fieldId);
+        }
+
+        // For SELECT elements, extract options (no clicking needed)
+        if (element.tagName === 'SELECT') {
+          fieldInfo.options = extractSelectOptions(element);
+        }
+        // For comboboxes, do FULL async extraction (click to open, extract options)
+        else if (element.getAttribute('role') === 'combobox' ||
+                 element.getAttribute('aria-haspopup') === 'listbox' ||
+                 element.getAttribute('aria-autocomplete') === 'list') {
+          console.log(`   ↳ Clicking to extract dropdown options...`);
+          const customOptions = await extractCustomDropdownOptions(element);
+          if (customOptions && customOptions.length > 0) {
+            fieldInfo.options = customOptions;
+            fieldInfo.input_type = 'custom_select';
+          }
+        }
+
+        newFields.push(fieldInfo);
+      } catch (error) {
+        console.error(`Rescan: error extracting field ${fieldId}:`, error);
+      }
+    }
+
+    console.log(`🔄 Rescan complete: ${newFields.length} new fields found`);
+    return newFields;
+  }
+
   async function scanFormFields() {
     // Find all input, select, and textarea elements, plus comboboxes
     const inputs = document.querySelectorAll('input, select, textarea, [role="combobox"], [role="listbox"]');
@@ -1273,187 +1354,6 @@
       }
     } catch (error) {
       console.error('Error detecting button fields:', error);
-    }
-
-    return formFields;
-  }
-
-  /**
-   * Re-scan form fields to capture newly visible fields
-   * Only processes fields whose IDs are NOT in previousFieldIds
-   * @param {Array} previousFieldIds - Array of field IDs from previous scan (to skip)
-   * @returns {Array} Array of NEW field objects that weren't in previousFieldIds
-   */
-  async function rescanFormFields(previousFieldIds = []) {
-    console.log(`🔄 Rescanning form fields (excluding ${previousFieldIds.length} previous fields)`);
-
-    // Create Set for O(1) lookup
-    const previousIdSet = new Set(previousFieldIds);
-
-    // Query DOM for all form field elements (same as initial scan)
-    const inputs = document.querySelectorAll('input, select, textarea, [role="combobox"], [role="listbox"]');
-    const formFields = [];
-    const radioGroups = new Map();
-    const checkboxGroups = new Map();
-
-    let skippedCount = 0;
-    let extractedCount = 0;
-
-    // Process each element
-    for (const element of inputs) {
-      // Skip hidden inputs and buttons (same logic as initial scan)
-      if (element.type === 'hidden' ||
-          element.type === 'submit' ||
-          element.type === 'button' ||
-          element.type === 'image' ||
-          element.type === 'reset') {
-        continue;
-      }
-
-      // For selects, include even if hidden - they might have custom UI
-      const isHiddenSelect = element.tagName === 'SELECT' && !isVisible(element);
-
-      // Skip if element is not visible (except hidden selects with custom UI)
-      if (!isVisible(element) && !isHiddenSelect) {
-        continue;
-      }
-
-      // If it's a hidden select, check if there's visible custom UI for it
-      if (isHiddenSelect) {
-        const parent = element.parentElement;
-        let hasVisibleUI = false;
-
-        if (parent) {
-          const siblings = Array.from(parent.children);
-          hasVisibleUI = siblings.some(sibling =>
-            sibling !== element &&
-            isVisible(sibling) &&
-            (sibling.classList.toString().match(/select|dropdown|combo|picker/i) ||
-             sibling.getAttribute('role') === 'combobox')
-          );
-        }
-
-        if (!hasVisibleUI) {
-          continue;
-        }
-      }
-
-      // Generate field ID using same logic as initial scan
-      const fieldId = element.id || element.name || `field_${formFields.length}`;
-
-      // Check if this field was already scanned
-      if (previousIdSet.has(fieldId)) {
-        console.log('Rescan: skipping existing field', fieldId);
-        skippedCount++;
-        continue;
-      }
-
-      // This is a NEW field - extract it fully
-      const fieldType = element.type || element.tagName.toLowerCase();
-      console.log('Rescan: extracting new field', fieldId, 'type:', fieldType);
-      extractedCount++;
-
-      // Group radio buttons by name (same as initial scan)
-      if (element.type === 'radio' && element.name) {
-        if (!radioGroups.has(element.name)) {
-          radioGroups.set(element.name, []);
-        }
-        radioGroups.get(element.name).push(element);
-        continue;
-      }
-
-      // Group checkboxes by name
-      if (element.type === 'checkbox' && element.name) {
-        if (!checkboxGroups.has(element.name)) {
-          checkboxGroups.set(element.name, []);
-        }
-        checkboxGroups.get(element.name).push(element);
-        continue;
-      }
-
-      // Process all other elements normally with full extraction
-      try {
-        const fieldInfo = await extractFieldInfo(element);
-        formFields.push(fieldInfo);
-      } catch (error) {
-        console.error('Error extracting field info during rescan:', error, element);
-      }
-    }
-
-    // Process radio button groups (only new ones)
-    for (const [name, elements] of radioGroups) {
-      if (elements.length === 0) continue;
-
-      const groupId = `radio_group_${name}`;
-      if (previousIdSet.has(groupId)) {
-        console.log('Rescan: skipping existing radio group', groupId);
-        skippedCount++;
-        continue;
-      }
-
-      console.log('Rescan: extracting new radio group', groupId);
-      extractedCount++;
-
-      try {
-        const firstElement = elements[0];
-        const fieldInfo = await extractFieldInfo(firstElement);
-
-        fieldInfo.input_type = 'radio_group';
-        fieldInfo.options = elements.map(el => ({
-          value: el.value || '',
-          text: getOptionLabel(el),
-          checked: el.checked
-        }));
-
-        const fieldset = firstElement.closest('fieldset');
-        if (fieldset) {
-          const legend = fieldset.querySelector('legend');
-          if (legend && legend.textContent.trim()) {
-            fieldInfo.label = legend.textContent.trim();
-          }
-        }
-
-        formFields.push(fieldInfo);
-      } catch (error) {
-        console.error('Error extracting radio group during rescan:', error);
-      }
-    }
-
-    // Process checkbox groups (only new ones)
-    for (const [name, elements] of checkboxGroups) {
-      if (elements.length === 0) continue;
-
-      const groupId = `checkbox_group_${name}`;
-      if (previousIdSet.has(groupId)) {
-        console.log('Rescan: skipping existing checkbox group', groupId);
-        skippedCount++;
-        continue;
-      }
-
-      console.log('Rescan: extracting new checkbox group', groupId);
-      extractedCount++;
-
-      try {
-        const firstElement = elements[0];
-        const fieldInfo = await extractFieldInfo(firstElement);
-
-        fieldInfo.input_type = 'checkbox_group';
-        fieldInfo.options = elements.map(el => ({
-          value: el.value || '',
-          text: getOptionLabel(el),
-          checked: el.checked
-        }));
-
-        formFields.push(fieldInfo);
-      } catch (error) {
-        console.error('Error extracting checkbox group during rescan:', error);
-      }
-    }
-
-    console.log(`✅ Rescan complete: ${skippedCount} skipped, ${extractedCount} new fields extracted`);
-    console.log(`✨ New fields detected: ${formFields.length}`);
-    if (formFields.length > 0) {
-      console.log('New field IDs:', formFields.map(f => f.id));
     }
 
     return formFields;
@@ -2251,6 +2151,29 @@
     return results;
   }
 
+  // Set up message listener for rescan requests and log retrieval
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'rescanFormFields') {
+      console.log('🔄 Rescan requested via message');
+      console.log('Message received, previousFieldIds:', request.previousFieldIds);
+      console.log('previousFieldIds length:', request.previousFieldIds?.length);
+      rescanFormFields(request.previousFieldIds || []).then(fields => {
+        console.log(`🔄 Rescan complete: ${fields.length} fields found`);
+        sendResponse({ fields });
+      }).catch(error => {
+        console.error('🔄 Rescan error:', error);
+        sendResponse({ fields: [], error: error.message });
+      });
+      return true; // async response
+    }
+
+    if (request.action === 'getConsoleLogs') {
+      console.log('📋 Console logs requested');
+      sendResponse({ logs: contentScriptLogs.join('\n') });
+      return true;
+    }
+  });
+
   // Execute the scan and return results
   const fields = await scanFormFields();
   const actions = scanActions();
@@ -2260,24 +2183,6 @@
   console.log('Fields:', fields);
   console.log('Actions:', actions);
   console.log('Job Details:', jobDetails);
-
-  // Set up message listener for rescan requests
-  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === 'rescanFormFields') {
-      console.log('📨 Received rescanFormFields message from popup');
-      const previousFieldIds = request.previousFieldIds || [];
-      console.log(`Previous field IDs to exclude: ${previousFieldIds.length}`);
-
-      rescanFormFields(previousFieldIds).then(fields => {
-        console.log(`📤 Sending ${fields.length} NEW fields back to popup`);
-        sendResponse({ fields });
-      }).catch(error => {
-        console.error('❌ Error in rescanFormFields:', error);
-        sendResponse({ fields: [], error: error.message });
-      });
-      return true; // Keep the message channel open for async response
-    }
-  });
 
   // Return the results (this will be received by popup.js)
   return {

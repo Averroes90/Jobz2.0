@@ -11,6 +11,7 @@ Environment:
 """
 
 import argparse
+import html
 import json
 import os
 import re
@@ -579,7 +580,9 @@ def create_cover_letter(
         }
 
         for placeholder, value in replacements.items():
-            content = content.replace(placeholder, value)
+            # Escape XML special characters (&, <, >, ", ') to prevent XML corruption
+            escaped_value = html.escape(value)
+            content = content.replace(placeholder, escaped_value)
 
         # Remove the ---BODY--- marker from the final document
         # (It was only needed as a placeholder in the template)

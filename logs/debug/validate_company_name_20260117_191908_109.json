@@ -1,0 +1,81 @@
+{
+  "name": "validate_company_name",
+  "timestamp": "2026-01-17T19:19:07.409210",
+  "start_time": "2026-01-17T19:19:07.409215",
+  "end_time": "2026-01-17T19:19:08.109240",
+  "duration_ms": 700.053375,
+  "inputs": {
+    "url_company": "Verkada",
+    "context": {
+      "company_links": [],
+      "form_labels": [
+        "First Name*",
+        "Last Name*",
+        "Preferred First Name",
+        "Email*",
+        "Country",
+        "Phone",
+        "Attach",
+        "Enter manually",
+        "Attach",
+        "Enter manually",
+        "LinkedIn Profile",
+        "Website",
+        "Gender*",
+        "Are you Hispanic/Latino?*",
+        "Veteran Status*",
+        "Disability Status*",
+        "Apply",
+        "First Name",
+        "Last Name",
+        "Preferred First Name"
+      ],
+      "headings": [
+        "Growth Product Manager",
+        "Who We Are",
+        "About the Role",
+        "What You’ll Do",
+        "What You Bring"
+      ],
+      "nav_links": [],
+      "page_title": "Job Application for Growth Product Manager at Verkada"
+    },
+    "job_description_sample": "NewGrowth Product ManagerSan Mateo, CA United StatesApplyWho We Are Verkada is transforming how organizations protect their people and places with an integrated, AI-powered platform. A leader in cloud physical security, Verkada helps organizations strengthen safety and efficiency through one connected software platform that includes solutions for video security, access control, air quality sensors, alarms, intercoms, and visitor management.Over 30,000 organizations worldwide, including more than"
+  },
+  "outputs": {
+    "decision": {
+      "result": "Verkada",
+      "success": true,
+      "reason": "Successfully extracted from page context"
+    },
+    "validated_name": "Verkada",
+    "fallback": false
+  },
+  "steps": [
+    {
+      "name": "select_model",
+      "timestamp": "2026-01-17T19:19:07.431850",
+      "model_name": "haiku",
+      "model_id": "claude-haiku-4-5-20251001"
+    },
+    {
+      "name": "format_context",
+      "timestamp": "2026-01-17T19:19:07.432556",
+      "num_headings": 5,
+      "num_nav_links": 0,
+      "num_form_labels": 20,
+      "num_company_links": 0
+    }
+  ],
+  "llm_calls": [
+    {
+      "timestamp": "2026-01-17T19:19:08.109183",
+      "prompt": "<task>\nExtract the accurate company name from this job application page.\n</task>\n\n<context>\nURL_COMPANY: Verkada\n\nPAGE_TITLE: Job Application for Growth Product Manager at Verkada\n\nHEADINGS: Growth Product Manager\nWho We Are\nAbout the Role\nWhat You’ll Do\nWhat You Bring\n\nNAV_LINKS: None\n\nFORM_LABELS: First Name*\nLast Name*\nPreferred First Name\nEmail*\nCountry\nPhone\nAttach\nEnter manually\nAttach\nEnter manually\nLinkedIn Profile\nWebsite\nGender*\nAre you Hispanic/Latino?*\nVeteran Status*\nDisability Status*\nApply\nFirst Name\nLast Name\nPreferred First Name\n\nCOMPANY_LINKS: None\n\nJOB_DESCRIPTION_SAMPLE: NewGrowth Product ManagerSan Mateo, CA United StatesApplyWho We Are Verkada is transforming how organizations protect their people and places with an integrated, AI-powered platform. A leader in cloud physical security, Verkada helps organizations strengthen safety and efficiency through one connected software platform that includes solutions for video security, access control, air quality sensors, alarms, intercoms, and visitor management.Over 30,000 organizations worldwide, including more than\n</context>\n\n<instructions>\n1. The URL suggests the company name is \"Verkada\", but this may be an ASCII-only slug that differs from the actual display name\n2. Look for the company name mentioned across multiple sources (headings, labels, links, description)\n3. Prioritize:\n   - Names that appear consistently across multiple sources\n   - Proper capitalization and special characters (prefer \"Zūm\" over \"Zum\" or \"Ridezum\")\n   - Names in navigation links to company homepage\n   - Names in form labels like \"Why do you want to work at [Company]?\"\n4. If multiple variations exist (e.g., \"Ridezum\" in URL vs \"Zūm\" on page), choose the properly formatted display name\n5. Return ONLY the company name with no additional text or explanation\n6. If no clear company name can be extracted from the context, return the URL company name as fallback\n</instructions>\n\n<output_format>\n[Company Name Only]\n</output_format>\n",
+      "response": "Verkada",
+      "model": "claude-haiku-4-5-20251001",
+      "tokens_in": 521,
+      "tokens_out": 6
+    }
+  ],
+  "errors": []
+}
