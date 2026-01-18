@@ -825,6 +825,15 @@ def map_form_fields(form_fields: list[dict], profile: dict, config: dict | None 
             print(f"❌ [CHECKPOINT:map_form_fields:InvalidType] Expected dict, got {type(mapping).__name__}, returning empty dict")
             return {}
 
+        # Defensive: LLM sometimes returns single field in wrong format
+        # {"id": "field_name", "mapping": "path"} instead of {"field_name": "path"}
+        if len(mapping) == 2 and "id" in mapping and "mapping" in mapping:
+            field_id = mapping["id"]
+            field_mapping_value = mapping["mapping"]
+            print(f"⚠️  [CHECKPOINT:map_form_fields:SingleFieldFormat] LLM used single-field format, converting...")
+            print(f"   ↳ Converting {{'id': '{field_id}', 'mapping': '{field_mapping_value}'}} → {{'{field_id}': '{field_mapping_value}'}}")
+            mapping = {field_id: field_mapping_value}
+
         print(f"✅ [CHECKPOINT:map_form_fields:Success] Field mapping complete: {len(mapping)} entries")
 
         # Debug: Show how cover letter candidates were mapped
@@ -1565,16 +1574,18 @@ def match_fields():
             field_id = field_info['field_id']
             action = field_info['action']
 
-            # Check if this is a file input field - file inputs should use files dict, not fill_values
+            # Check if this is a non-text field - these should use files dict or button clicks, not fill_values
             field_data = field_map.get(field_id, {})
-            is_file_input = field_data.get('type') == 'file'
+            input_type = field_data.get('input_type', '')
+            NON_TEXT_INPUT_TYPES = {'button_group', 'radio_group', 'checkbox_group', 'select', 'custom_select', 'combobox', 'file'}
+            is_non_text_field = input_type in NON_TEXT_INPUT_TYPES or field_data.get('type') == 'file'
 
             # Direct mapping for cover letter fields - NO LLM involvement
             if action == 'COVER_LETTER_BODY':
                 cover_letter_fields_handled.append(field_id)  # Mark as handled regardless
-                if is_file_input:
-                    # File inputs use files dict, not fill_values
-                    print(f"⏭️  Skipping COVER_LETTER_BODY for file input {field_id} (uses files dict)")
+                if is_non_text_field:
+                    # Non-text fields use files dict or button clicks, not fill_values
+                    print(f"⏭️  Skipping COVER_LETTER_BODY for non-text field {field_id} (type: {input_type})")
                 elif cover_letter_text:
                     generated_content[field_id] = cover_letter_text
                     print(f"✓ Directly assigned COVER_LETTER_BODY to {field_id} ({len(cover_letter_text)} chars)")
@@ -1585,9 +1596,9 @@ def match_fields():
 
             elif action == 'COVER_LETTER_WHY':
                 cover_letter_fields_handled.append(field_id)
-                if is_file_input:
-                    # File inputs use files dict, not fill_values
-                    print(f"⏭️  Skipping COVER_LETTER_WHY for file input {field_id} (uses files dict)")
+                if is_non_text_field:
+                    # Non-text fields use files dict or button clicks, not fill_values
+                    print(f"⏭️  Skipping COVER_LETTER_WHY for non-text field {field_id} (type: {input_type})")
                 elif why_paragraph:
                     generated_content[field_id] = why_paragraph
                     print(f"✓ Directly assigned COVER_LETTER_WHY to {field_id} ({len(why_paragraph)} chars)")
@@ -1596,9 +1607,9 @@ def match_fields():
 
             elif action == 'COVER_LETTER_FULL':
                 cover_letter_fields_handled.append(field_id)
-                if is_file_input:
-                    # File inputs use files dict, not fill_values
-                    print(f"⏭️  Skipping COVER_LETTER_FULL for file input {field_id} (uses files dict)")
+                if is_non_text_field:
+                    # Non-text fields use files dict or button clicks, not fill_values
+                    print(f"⏭️  Skipping COVER_LETTER_FULL for non-text field {field_id} (type: {input_type})")
                 elif cover_letter_text:
                     # For FULL, we'd need to read the actual .docx with header
                     # For now, use body + header info from profile

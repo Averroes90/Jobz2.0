@@ -884,15 +884,36 @@ fillButton.addEventListener('click', async () => {
               elementRole: element.getAttribute('role')
             });
 
-            // Skip if this element is or contains a file input - files are handled separately
+            // Skip if this element IS a file input - files are handled separately
             const isFileInput = element.type === 'file';
-            const containsFileInput = element.querySelector && element.querySelector('input[type="file"]') !== null;
-            if (isFileInput || containsFileInput) {
-              console.log('⏭️ [CHECKPOINT:fillForm:SkippingFileContainer]', {
+            if (isFileInput) {
+              console.log('⏭️ [CHECKPOINT:fillForm:SkippingFileInput]', {
                 fieldIdentifier,
-                reason: isFileInput ? 'Element is file input' : 'Element contains file input'
+                reason: 'Element is file input (handled separately)'
               });
               continue;
+            }
+
+            // Check if this is a button group that's actually a file upload UI
+            // (has buttons like "Attach", "Upload", "Browse" and contains a file input)
+            const isButtonGroupFileUpload = fieldIdentifier.startsWith('button_group_') &&
+              element.querySelector && element.querySelector('input[type="file"]') !== null;
+
+            if (isButtonGroupFileUpload) {
+              const buttons = element.querySelectorAll('button, [role="button"]');
+              const buttonTexts = Array.from(buttons).map(b => b.textContent.trim().toLowerCase());
+              const hasFileUploadButton = buttonTexts.some(text =>
+                ['attach', 'upload', 'browse', 'choose file', 'select file'].includes(text)
+              );
+
+              if (hasFileUploadButton) {
+                console.log('⏭️ [CHECKPOINT:fillForm:SkippingFileUploadButtonGroup]', {
+                  fieldIdentifier,
+                  reason: 'Button group is file upload UI (has file input + Attach/Upload button)',
+                  buttonTexts
+                });
+                continue;
+              }
             }
 
             // Check if this is a button group (either by ID prefix or by having button children)
