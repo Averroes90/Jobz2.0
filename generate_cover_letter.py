@@ -235,23 +235,91 @@ def get_company_address(
 
     print(f"🔍 [CHECKPOINT:address_lookup:RawParsed] LINE1='{line1}' | LINE2='{line2}'")
 
-    # Check if LINE2 starts with just a state abbreviation (2 uppercase letters)
-    # This indicates the city is in LINE1 when it should be in LINE2
-    if line2 and re.match(r'^[A-Z]{2}\s+\d{5}', line2):
-        # LINE2 is just "CA 94065" or similar - city is missing
-        print(f"🔍 [CHECKPOINT:address_lookup:DetectedMisformat] LINE2 starts with state code")
-        # Try to extract city from end of LINE1
-        # Look for pattern: "street address, City Name" in LINE1
+    # US state abbreviations for validation
+    US_STATES = {
+        'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+        'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+        'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+        'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+        'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY', 'DC'
+    }
+
+    # Check if LINE2 is missing city (zipcode-only OR state+zipcode without city)
+    needs_fix = False
+    state_code = None
+    zipcode = None
+
+    if line2:
+        # Pattern 1: Just zipcode "94107"
+        if re.match(r'^\d{5}(-\d{4})?$', line2):
+            needs_fix = True
+            zipcode = line2
+            print(f"🔍 [CHECKPOINT:address_lookup:DetectedMisformat] LINE2 is zipcode-only: '{line2}'")
+
+        # Pattern 2: State + zipcode "CA 94107"
+        elif re.match(r'^[A-Z]{2}\s+\d{5}(-\d{4})?$', line2):
+            needs_fix = True
+            match = re.match(r'^([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$', line2)
+            state_code = match.group(1)
+            zipcode = match.group(2)
+            print(f"🔍 [CHECKPOINT:address_lookup:DetectedMisformat] LINE2 has state+zip but no city: '{line2}'")
+
+        # Pattern 3: Verify LINE2 has proper format (city, state zip)
+        elif not re.search(r'[A-Za-z]+.*,\s*[A-Z]{2}\s+\d{5}', line2):
+            # LINE2 doesn't have the expected "City, ST ZIP" format
+            # Try to extract what we can
+            zip_match = re.search(r'\d{5}(-\d{4})?', line2)
+            state_match = re.search(r'\b([A-Z]{2})\b', line2)
+            if zip_match or state_match:
+                needs_fix = True
+                zipcode = zip_match.group(0) if zip_match else None
+                state_code = state_match.group(1) if state_match and state_match.group(1) in US_STATES else None
+                print(f"🔍 [CHECKPOINT:address_lookup:DetectedMisformat] LINE2 has unexpected format: '{line2}'")
+
+    if needs_fix and line1:
+        # Try to extract city from LINE1
+        city = None
+        street = None
+
+        # Pattern A: "street address, City Name" (city at END)
         match = re.search(r'^(.+?),\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)$', line1)
         if match:
             street = match.group(1).strip()
             city = match.group(2).strip()
+            print(f"🔍 [CHECKPOINT:address_lookup:ExtractedCity] Found city at END of LINE1: '{city}'")
+
+        # Pattern B: "City Name, street address" (city at BEGINNING)
+        if not city:
+            match = re.search(r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s+(.+)$', line1)
+            if match:
+                city = match.group(1).strip()
+                street = match.group(2).strip()
+                print(f"🔍 [CHECKPOINT:address_lookup:ExtractedCity] Found city at BEGINNING of LINE1: '{city}'")
+
+        # Pattern C: Multi-word city at end without proper capitalization
+        if not city:
+            match = re.search(r'^(.+?),\s+([A-Z][a-zA-Z\s]+)$', line1)
+            if match:
+                street = match.group(1).strip()
+                city = match.group(2).strip()
+                print(f"🔍 [CHECKPOINT:address_lookup:ExtractedCity] Found multi-word city at END: '{city}'")
+
+        # Reconstruct the address if we successfully extracted city
+        if city and street:
             result["address_line1"] = street
-            result["address_line2"] = f"{city}, {line2}"
+
+            # Build LINE2: "City, ST ZIP"
+            if state_code and zipcode:
+                result["address_line2"] = f"{city}, {state_code} {zipcode}"
+            elif zipcode:
+                result["address_line2"] = f"{city}, {zipcode}"
+            else:
+                result["address_line2"] = city
+
             print(f"✅ [CHECKPOINT:address_lookup:FixedFormat] Moved '{city}' from LINE1 to LINE2")
-            print(f"   New: LINE1='{street}' | LINE2='{city}, {line2}'")
+            print(f"   New: LINE1='{result['address_line1']}' | LINE2='{result['address_line2']}'")
         else:
-            print(f"❌ [CHECKPOINT:address_lookup:FixFailed] Could not extract city from LINE1")
+            print(f"❌ [CHECKPOINT:address_lookup:FixFailed] Could not extract city from LINE1: '{line1}'")
 
     return result
 
@@ -729,7 +797,6 @@ def run_pipeline(
         print(f"Found address: {address['address_line1']}, {address['address_line2']}")
 
         # Get company context
-        print(f"Researching {company_name}...")
         research_model_id = get_model_id("company_research", model_override)
         context_result = get_company_context(
             company_name, role_title, job_description, research_model_id, config
